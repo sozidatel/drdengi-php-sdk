@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Service\CategoryService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -72,5 +73,78 @@ final class CategoryServiceTest extends TestCase
 
         self::assertCount(1, $tree);
         self::assertSame('Visible', $tree[0]->category->name);
+    }
+
+    public function testCreatesCategoryViaSetCategoryList(): void
+    {
+        $transport = new FakeTransport([
+            'setCategoryList' => [
+                ['server_id' => '101', 'client_id' => '123'],
+            ],
+        ]);
+        $service = new CategoryService($transport);
+
+        $result = $service->create(
+            name: 'Food',
+            parentId: '10',
+            hidden: true,
+            sort: '20',
+            fields: ['budget_family_id' => '7'],
+        );
+
+        self::assertSame([['server_id' => '101', 'client_id' => '123']], $result);
+        self::assertSame('setCategoryList', $transport->calls[0]['method']);
+
+        $payload = $transport->calls[0]['arguments'][0][0];
+        self::assertIsInt($payload['client_id']);
+        self::assertSame('Food', $payload['name']);
+        self::assertSame('10', $payload['parent_id']);
+        self::assertSame(3, $payload['type']);
+        self::assertTrue($payload['is_hidden']);
+        self::assertFalse($payload['is_for_duty']);
+        self::assertSame('20', $payload['sort']);
+        self::assertSame('7', $payload['budget_family_id']);
+    }
+
+    public function testCreateCategoryUsesRootParentByDefault(): void
+    {
+        $transport = new FakeTransport(['setCategoryList' => []]);
+        $service = new CategoryService($transport);
+
+        $service->create('Food');
+
+        self::assertSame('-1', $transport->calls[0]['arguments'][0][0]['parent_id']);
+        self::assertFalse($transport->calls[0]['arguments'][0][0]['is_hidden']);
+        self::assertSame('0', $transport->calls[0]['arguments'][0][0]['sort']);
+    }
+
+    public function testCannotCreateCategoryWithoutName(): void
+    {
+        $service = new CategoryService(new FakeTransport());
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $service->create('   ');
+    }
+
+    public function testUpdatesCategoryViaSetCategoryList(): void
+    {
+        $transport = new FakeTransport(['setCategoryList' => [['server_id' => '10']]]);
+        $service = new CategoryService($transport);
+
+        $service->update('10', ['name' => 'Food']);
+
+        self::assertSame('setCategoryList', $transport->calls[0]['method']);
+        self::assertSame(['name' => 'Food', 'server_id' => '10'], $transport->calls[0]['arguments'][0][0]);
+    }
+
+    public function testDeletesCategoryAsObject(): void
+    {
+        $transport = new FakeTransport(['deleteObject' => 1]);
+        $service = new CategoryService($transport);
+
+        self::assertTrue($service->delete('10'));
+        self::assertSame('deleteObject', $transport->calls[0]['method']);
+        self::assertSame([10, 'object'], $transport->calls[0]['arguments']);
     }
 }

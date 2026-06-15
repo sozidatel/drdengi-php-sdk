@@ -83,6 +83,17 @@ final class RecordQuery
         return $this;
     }
 
+    /**
+     * @param list<int|string> $ids
+     */
+    public function onlyCategories(array $ids): self
+    {
+        $this->categoryFilter = 1;
+        $this->categoryIds = $this->normalizeIds($ids);
+
+        return $this;
+    }
+
     public function originalCurrency(): self
     {
         $this->currencyId = 0;

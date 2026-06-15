@@ -26,4 +26,15 @@ final class RecordQueryTest extends TestCase
         self::assertSame(1, $params['r_is_place']);
         self::assertSame(['11416426'], $params['r_place']);
     }
+
+    public function testCanFilterByCategory(): void
+    {
+        $params = RecordQuery::forDateRange(
+            new \DateTimeImmutable('2026-01-01'),
+            new \DateTimeImmutable('2026-01-31'),
+        )->onlyCategories(['10', 20, '10'])->toSoapParams();
+
+        self::assertSame(1, $params['r_is_category']);
+        self::assertSame(['10', '20'], $params['r_category']);
+    }
 }

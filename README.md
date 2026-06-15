@@ -88,6 +88,17 @@ foreach ($client->categories()->options(includeHidden: false) as $option) {
 }
 ```
 
+Создание категории расходов:
+
+```php
+$created = $client->categories()->create(
+    name: 'Кафе',
+    parentId: null, // null означает корневую категорию
+);
+
+$categoryId = $created[0]['server_id'];
+```
+
 Источники доходов поддерживают тот же интерфейс:
 
 ```php
@@ -113,7 +124,9 @@ $records = $client->records()->list(
     RecordQuery::forDateRange(
         new DateTimeImmutable('2026-01-01'),
         new DateTimeImmutable('2026-01-31'),
-    )->onlyPlaces(['11416426'])
+    )
+        ->onlyPlaces(['11416426'])
+        ->onlyCategories(['CATEGORY_ID'])
 );
 ```
 

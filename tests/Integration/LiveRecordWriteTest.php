@@ -6,8 +6,10 @@ namespace Soz\Drebedengi\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\TransportException;
+use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
+use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
 final class LiveRecordWriteTest extends TestCase
@@ -137,6 +139,115 @@ final class LiveRecordWriteTest extends TestCase
         }
     }
 
+    public function testExpenseCategoryCannotBeDeletedWhileExpenseUsesIt(): void
+    {
+        $client = LiveClientFactory::clientOrSkip($this);
+
+        $place = $client->places()->accounts()[0] ?? null;
+        $currency = $client->currencies()->list()[0] ?? null;
+        if (!$place || !$currency) {
+            self::markTestSkipped('Live Drebedengi account does not have place/currency fixtures.');
+        }
+
+        $categoryId = null;
+        $recordId = null;
+        try {
+            $categoryId = $this->createCategory($client, 'drdengi-php-sdk live category ' . bin2hex(random_bytes(4)));
+            $comment = 'drdengi-php-sdk live category expense ' . bin2hex(random_bytes(4));
+
+            $createdRecord = $client->records()->createExpense(
+                placeId: $place->id,
+                categoryId: $categoryId,
+                amount: MoneyAmount::fromDecimalString('1.11'),
+                currencyId: $currency->id,
+                date: new \DateTimeImmutable('now'),
+                comment: $comment,
+            );
+            $recordId = $this->requireCreatedId($createdRecord, $client, $comment);
+
+            $records = $client->records()->list(
+                RecordQuery::forDateRange(new \DateTimeImmutable('today'), new \DateTimeImmutable('today'))
+                    ->operationType(OperationType::Expense)
+                    ->onlyCategories([$categoryId]),
+            );
+
+            $matched = array_values(array_filter(
+                $records,
+                static fn ($record): bool => $record->id === $recordId
+                    && $record->budgetObjectId === $categoryId
+                    && $record->comment === $comment,
+            ));
+            self::assertCount(1, $matched);
+
+            $this->expectException(TransportException::class);
+            try {
+                $client->categories()->delete($categoryId);
+            } catch (TransportException $exception) {
+                $client->records()->delete($recordId, OperationType::Expense);
+                $recordId = null;
+
+                self::assertTrue($client->categories()->delete($categoryId));
+                $categoryId = null;
+
+                throw $exception;
+            }
+        } finally {
+            if ($recordId !== null) {
+                try {
+                    $client->records()->delete($recordId, OperationType::Expense);
+                } catch (\Throwable) {
+                    // Keep cleanup best-effort so the original assertion is not hidden.
+                }
+            }
+            if ($categoryId !== null) {
+                try {
+                    $client->categories()->delete($categoryId);
+                } catch (\Throwable) {
+                    // Keep cleanup best-effort so the original assertion is not hidden.
+                }
+            }
+        }
+    }
+
+    public function testDeletingParentCategoryAlsoDeletesChildCategory(): void
+    {
+        $client = LiveClientFactory::clientOrSkip($this);
+
+        $parentId = null;
+        $childId = null;
+        try {
+            $parentId = $this->createCategory($client, 'drdengi-php-sdk live parent ' . bin2hex(random_bytes(4)));
+            $childId = $this->createCategory($client, 'drdengi-php-sdk live child ' . bin2hex(random_bytes(4)), $parentId);
+
+            $child = $this->findCategory($client, $childId);
+            self::assertNotNull($child);
+            self::assertSame($parentId, $child->parentId);
+
+            self::assertTrue($client->categories()->delete($parentId));
+
+            self::assertNull($this->findCategory($client, $parentId));
+            self::assertNull($this->findCategory($client, $childId));
+
+            $parentId = null;
+            $childId = null;
+        } finally {
+            if ($childId !== null) {
+                try {
+                    $client->categories()->delete($childId);
+                } catch (\Throwable) {
+                    // Parent deletion can already remove the whole subtree.
+                }
+            }
+            if ($parentId !== null) {
+                try {
+                    $client->categories()->delete($parentId);
+                } catch (\Throwable) {
+                    // Keep cleanup best-effort so the original assertion is not hidden.
+                }
+            }
+        }
+    }
+
     /**
      * @param list<array<string, mixed>> $created
      */
@@ -167,7 +278,7 @@ final class LiveRecordWriteTest extends TestCase
     /**
      * @param list<array<string, mixed>> $created
      */
-    private function requireCreatedId(array $created, \Soz\Drebedengi\DrebedengiClient $client, string $comment): string
+    private function requireCreatedId(array $created, DrebedengiClient $client, string $comment): string
     {
         $serverId = $this->extractServerId($created);
         if ($serverId !== null) {
@@ -181,5 +292,36 @@ final class LiveRecordWriteTest extends TestCase
         }
 
         self::fail('Created record server id was not found.');
+    }
+
+    private function createCategory(DrebedengiClient $client, string $name, int|string|null $parentId = null): string
+    {
+        try {
+            $created = $client->categories()->create($name, $parentId);
+        } catch (TransportException $exception) {
+            if (str_contains($exception->getMessage(), 'No payment')) {
+                self::markTestSkipped('Drebedengi test account does not allow write calls: No payment.');
+            }
+
+            throw $exception;
+        }
+
+        $serverId = $this->extractServerId($created);
+        if ($serverId === null) {
+            self::fail('Created category server id was not found.');
+        }
+
+        return $serverId;
+    }
+
+    private function findCategory(DrebedengiClient $client, string $id): ?\Soz\Drebedengi\Model\Category
+    {
+        foreach ($client->categories()->list() as $category) {
+            if ($category->id === $id) {
+                return $category;
+            }
+        }
+
+        return null;
     }
 }

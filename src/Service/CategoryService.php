@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Service;
 
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Model\Category;
 use Soz\Drebedengi\Model\CategoryNode;
 use Soz\Drebedengi\Model\CategoryOption;
+use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Transport\TransportInterface;
 
@@ -52,6 +54,64 @@ final readonly class CategoryService
         }
 
         return $options;
+    }
+
+    /**
+     * @param array<string, mixed> $fields Extra SOAP fields for `setCategoryList`.
+     * @return list<array<string, mixed>>
+     */
+    public function create(
+        string $name,
+        int|string|null $parentId = null,
+        bool $hidden = false,
+        int|string|null $sort = null,
+        array $fields = [],
+    ): array {
+        $name = trim($name);
+        if ($name === '') {
+            throw new InvalidArgumentException('Cannot create a Drebedengi category without name.');
+        }
+
+        $payload = [
+            'client_id' => $this->clientId(),
+            'name' => $name,
+            'parent_id' => $parentId === null ? '-1' : (string)$parentId,
+            'type' => 3,
+            'is_hidden' => $hidden,
+            'is_for_duty' => false,
+            'sort' => $sort === null ? '0' : (string)$sort,
+        ];
+
+        return $this->savePayloads([array_replace($fields, $payload)]);
+    }
+
+    /**
+     * @param array<string, mixed> $fields
+     * @return list<array<string, mixed>>
+     */
+    public function update(string|int $serverId, array $fields): array
+    {
+        $payload = array_replace($fields, ['server_id' => (string)$serverId]);
+
+        return $this->savePayloads([$payload]);
+    }
+
+    public function delete(string|int $id): bool
+    {
+        return (int)$this->transport->call('deleteObject', [(int)$id, DeleteObjectType::Object->value]) === 1;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $payloads
+     * @return list<array<string, mixed>>
+     */
+    public function savePayloads(array $payloads): array
+    {
+        if ($payloads === []) {
+            return [];
+        }
+
+        return DrebedengiNormalizer::listOfArrays($this->transport->call('setCategoryList', [$payloads]));
     }
 
     /**
@@ -104,5 +164,10 @@ final readonly class CategoryService
         foreach ($node->children as $child) {
             $this->appendOptions($child, $options, $indent);
         }
+    }
+
+    private function clientId(): int
+    {
+        return random_int(1, 999_999_999);
     }
 }
