@@ -6,7 +6,9 @@ namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\DeleteObjectType;
+use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\Record;
@@ -58,17 +60,63 @@ final readonly class RecordService
         \DateTimeInterface $date,
         string $comment = '',
     ): array {
-        return $this->savePayloads([[
-            'client_id' => $this->clientId(),
-            'place_id' => (string)$placeId,
-            'budget_object_id' => (string)$categoryId,
-            'sum' => -abs($amount->minorUnits),
-            'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
-            'comment' => $comment,
-            'currency_id' => (string)$currencyId,
-            'is_duty' => false,
-            'operation_type' => OperationType::Expense->value,
-        ]]);
+        return $this->savePayloads([
+            $this->expensePayload($placeId, $categoryId, $amount, $currencyId, $date, $comment),
+        ]);
+    }
+
+    /**
+     * @param list<ExpenseGroupItem|array{categoryId: int|string, amount: MoneyAmount, comment?: string}> $items
+     * @return list<array<string, mixed>>
+     */
+    public function createExpenseGroup(
+        int|string $placeId,
+        array $items,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+    ): array {
+        $items = array_map($this->normalizeExpenseGroupItem(...), $items);
+        if ($items === []) {
+            return [];
+        }
+
+        if (count($items) === 1) {
+            $item = $items[0];
+
+            return $this->createExpense(
+                placeId: $placeId,
+                categoryId: $item->categoryId,
+                amount: $item->amount,
+                currencyId: $currencyId,
+                date: $date,
+                comment: $item->comment,
+            );
+        }
+
+        $first = $items[0];
+        $firstCreated = $this->savePayloads([
+            $this->expensePayload($placeId, $first->categoryId, $first->amount, $currencyId, $date, $first->comment),
+        ]);
+
+        $groupId = $this->extractServerId($firstCreated);
+        if ($groupId === null) {
+            throw new UnexpectedResponseException('Drebedengi setRecordList response does not contain first expense server_id for group_id.');
+        }
+
+        $payloads = [];
+        foreach ($items as $index => $item) {
+            $payload = $this->expensePayload($placeId, $item->categoryId, $item->amount, $currencyId, $date, $item->comment);
+            $payload['group_id'] = $groupId;
+
+            if ($index === 0) {
+                unset($payload['client_id']);
+                $payload['server_id'] = $groupId;
+            }
+
+            $payloads[] = $payload;
+        }
+
+        return $this->savePayloads($payloads);
     }
 
     /**
@@ -231,6 +279,70 @@ final readonly class RecordService
     private function clientId(): int
     {
         return random_int(1, 999_999_999);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function expensePayload(
+        int|string $placeId,
+        int|string $categoryId,
+        MoneyAmount $amount,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+        string $comment = '',
+    ): array {
+        return [
+            'client_id' => $this->clientId(),
+            'place_id' => (string)$placeId,
+            'budget_object_id' => (string)$categoryId,
+            'sum' => -abs($amount->minorUnits),
+            'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
+            'comment' => $comment,
+            'currency_id' => (string)$currencyId,
+            'is_duty' => false,
+            'operation_type' => OperationType::Expense->value,
+        ];
+    }
+
+    /**
+     * @param ExpenseGroupItem|array{categoryId: int|string, amount: MoneyAmount, comment?: string} $item
+     */
+    private function normalizeExpenseGroupItem(ExpenseGroupItem|array $item): ExpenseGroupItem
+    {
+        if ($item instanceof ExpenseGroupItem) {
+            return $item;
+        }
+
+        if (!array_key_exists('categoryId', $item) || !array_key_exists('amount', $item)) {
+            throw new InvalidArgumentException('Expense group item must contain categoryId and amount.');
+        }
+
+        if (!$item['amount'] instanceof MoneyAmount) {
+            throw new InvalidArgumentException('Expense group item amount must be an instance of MoneyAmount.');
+        }
+
+        return new ExpenseGroupItem(
+            categoryId: $item['categoryId'],
+            amount: $item['amount'],
+            comment: (string)($item['comment'] ?? ''),
+        );
+    }
+
+    /**
+     * @param list<array<string, mixed>> $created
+     */
+    private function extractServerId(array $created): ?string
+    {
+        foreach ($created as $item) {
+            foreach (['server_id', 'id'] as $field) {
+                if (array_key_exists($field, $item) && trim((string)$item[$field]) !== '') {
+                    return (string)$item[$field];
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

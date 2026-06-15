@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\Category;
 use Soz\Drebedengi\Model\CategoryNode;
 use Soz\Drebedengi\Model\CategoryOption;
@@ -25,6 +26,17 @@ final readonly class CategoryService
     {
         return $this->sort(array_map(Category::fromSoap(...), DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getCategoryList'),
+        )));
+    }
+
+    /**
+     * @param list<int|string> $ids
+     * @return list<Category>
+     */
+    public function byIds(array $ids): array
+    {
+        return $this->sort(array_map(Category::fromSoap(...), DrebedengiNormalizer::listOfArrays(
+            $this->transport->call('getCategoryList', [$this->normalizeIds($ids)]),
         )));
     }
 
@@ -56,17 +68,11 @@ final readonly class CategoryService
         return $options;
     }
 
-    /**
-     * @param array<string, mixed> $fields Extra SOAP fields for `setCategoryList`.
-     * @return list<array<string, mixed>>
-     */
     public function create(
         string $name,
         int|string|null $parentId = null,
         bool $hidden = false,
-        int|string|null $sort = null,
-        array $fields = [],
-    ): array {
+    ): Category {
         $name = trim($name);
         if ($name === '') {
             throw new InvalidArgumentException('Cannot create a Drebedengi category without name.');
@@ -79,10 +85,20 @@ final readonly class CategoryService
             'type' => 3,
             'is_hidden' => $hidden,
             'is_for_duty' => false,
-            'sort' => $sort === null ? '0' : (string)$sort,
+            'sort' => '0',
         ];
 
-        return $this->savePayloads([array_replace($fields, $payload)]);
+        $serverId = $this->extractServerId($this->savePayloads([$payload]));
+        if ($serverId === null) {
+            throw new UnexpectedResponseException('Drebedengi setCategoryList response does not contain created category server_id.');
+        }
+
+        $category = $this->byIds([$serverId])[0] ?? null;
+        if (!$category instanceof Category) {
+            throw new UnexpectedResponseException(sprintf('Created Drebedengi category "%s" was not found by server id %s.', $name, $serverId));
+        }
+
+        return $category;
     }
 
     /**
@@ -169,5 +185,30 @@ final readonly class CategoryService
     private function clientId(): int
     {
         return random_int(1, 999_999_999);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $created
+     */
+    private function extractServerId(array $created): ?string
+    {
+        foreach ($created as $item) {
+            foreach (['server_id', 'id'] as $field) {
+                if (array_key_exists($field, $item) && trim((string)$item[$field]) !== '') {
+                    return (string)$item[$field];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<int|string> $ids
+     * @return list<string>
+     */
+    private function normalizeIds(array $ids): array
+    {
+        return array_values(array_map(static fn (int|string $id): string => (string)$id, $ids));
     }
 }

@@ -6,6 +6,9 @@ namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\ClientOptions;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
+use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Service\RecordService;
@@ -101,6 +104,138 @@ final class RecordServiceTest extends TestCase
 
         $payload = $transport->calls[0]['arguments'][0][0];
         self::assertSame('2026-06-14 12:00:00', $payload['operation_date']);
+    }
+
+    public function testCreateExpenseGroupReturnsEmptyResponseForEmptyItems(): void
+    {
+        $transport = new FakeTransport();
+        $service = new RecordService($transport);
+
+        self::assertSame([], $service->createExpenseGroup(
+            placeId: '1',
+            items: [],
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+        ));
+        self::assertSame([], $transport->calls);
+    }
+
+    public function testCreateExpenseGroupWithOneItemUsesSingleExpensePayload(): void
+    {
+        $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
+        $service = new RecordService($transport);
+
+        $result = $service->createExpenseGroup(
+            placeId: '1',
+            items: [
+                new ExpenseGroupItem('2', MoneyAmount::fromDecimalString('12.34'), 'Coffee'),
+            ],
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+        );
+
+        self::assertSame([['server_id' => '10']], $result);
+        self::assertCount(1, $transport->calls);
+
+        $payload = $transport->calls[0]['arguments'][0][0];
+        self::assertSame('2', $payload['budget_object_id']);
+        self::assertSame(-1234, $payload['sum']);
+        self::assertSame('Coffee', $payload['comment']);
+        self::assertArrayNotHasKey('group_id', $payload);
+    }
+
+    public function testCreateExpenseGroupBuildsTwoStepGroupedPayload(): void
+    {
+        $transport = new FakeTransport([
+            'setRecordList' => [
+                '__sequence' => [
+                    [['server_id' => '100']],
+                    [['server_id' => '100'], ['server_id' => '101']],
+                ],
+            ],
+        ]);
+        $service = new RecordService(
+            $transport,
+            new ClientOptions(new \DateTimeZone('Europe/Podgorica')),
+        );
+
+        $result = $service->createExpenseGroup(
+            placeId: '1',
+            items: [
+                new ExpenseGroupItem('10', MoneyAmount::fromDecimalString('12.34'), 'Coffee'),
+                ['categoryId' => '20', 'amount' => MoneyAmount::fromDecimalString('5.67'), 'comment' => 'Cake'],
+            ],
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 10:00:00', new \DateTimeZone('UTC')),
+        );
+
+        self::assertSame([['server_id' => '100'], ['server_id' => '101']], $result);
+        self::assertCount(2, $transport->calls);
+
+        $firstCreatePayload = $transport->calls[0]['arguments'][0][0];
+        self::assertArrayHasKey('client_id', $firstCreatePayload);
+        self::assertArrayNotHasKey('group_id', $firstCreatePayload);
+        self::assertSame('10', $firstCreatePayload['budget_object_id']);
+        self::assertSame(-1234, $firstCreatePayload['sum']);
+
+        $groupedPayloads = $transport->calls[1]['arguments'][0];
+        self::assertCount(2, $groupedPayloads);
+
+        self::assertSame('100', $groupedPayloads[0]['server_id']);
+        self::assertArrayNotHasKey('client_id', $groupedPayloads[0]);
+        self::assertSame('100', $groupedPayloads[0]['group_id']);
+        self::assertSame('10', $groupedPayloads[0]['budget_object_id']);
+        self::assertSame(-1234, $groupedPayloads[0]['sum']);
+        self::assertSame('Coffee', $groupedPayloads[0]['comment']);
+        self::assertSame(3, $groupedPayloads[0]['operation_type']);
+        self::assertSame('2026-06-14 12:00:00', $groupedPayloads[0]['operation_date']);
+
+        self::assertArrayHasKey('client_id', $groupedPayloads[1]);
+        self::assertSame('100', $groupedPayloads[1]['group_id']);
+        self::assertSame('20', $groupedPayloads[1]['budget_object_id']);
+        self::assertSame(-567, $groupedPayloads[1]['sum']);
+        self::assertSame('Cake', $groupedPayloads[1]['comment']);
+        self::assertSame(3, $groupedPayloads[1]['operation_type']);
+    }
+
+    public function testCreateExpenseGroupRequiresFirstServerId(): void
+    {
+        $transport = new FakeTransport([
+            'setRecordList' => [
+                '__sequence' => [
+                    [[]],
+                ],
+            ],
+        ]);
+        $service = new RecordService($transport);
+
+        $this->expectException(UnexpectedResponseException::class);
+
+        $service->createExpenseGroup(
+            placeId: '1',
+            items: [
+                new ExpenseGroupItem('10', MoneyAmount::fromDecimalString('1.00')),
+                new ExpenseGroupItem('20', MoneyAmount::fromDecimalString('2.00')),
+            ],
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+        );
+    }
+
+    public function testCreateExpenseGroupValidatesArrayItems(): void
+    {
+        $service = new RecordService(new FakeTransport());
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $service->createExpenseGroup(
+            placeId: '1',
+            items: [
+                ['categoryId' => '10', 'amount' => '12.34'],
+            ],
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+        );
     }
 
     public function testRecordQueryFormatsDateRangeInAccountTimezone(): void

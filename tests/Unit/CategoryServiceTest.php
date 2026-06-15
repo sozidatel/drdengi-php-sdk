@@ -6,6 +6,7 @@ namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Service\CategoryService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -81,18 +82,22 @@ final class CategoryServiceTest extends TestCase
             'setCategoryList' => [
                 ['server_id' => '101', 'client_id' => '123'],
             ],
+            'getCategoryList' => [
+                ['id' => '101', 'parent_id' => '10', 'name' => 'Food', 'sort' => '20', 'is_hidden' => 't'],
+            ],
         ]);
         $service = new CategoryService($transport);
 
-        $result = $service->create(
+        $category = $service->create(
             name: 'Food',
             parentId: '10',
             hidden: true,
-            sort: '20',
-            fields: ['budget_family_id' => '7'],
         );
 
-        self::assertSame([['server_id' => '101', 'client_id' => '123']], $result);
+        self::assertSame('101', $category->id);
+        self::assertSame('Food', $category->name);
+        self::assertSame('10', $category->parentId);
+        self::assertTrue($category->hidden);
         self::assertSame('setCategoryList', $transport->calls[0]['method']);
 
         $payload = $transport->calls[0]['arguments'][0][0];
@@ -102,13 +107,17 @@ final class CategoryServiceTest extends TestCase
         self::assertSame(3, $payload['type']);
         self::assertTrue($payload['is_hidden']);
         self::assertFalse($payload['is_for_duty']);
-        self::assertSame('20', $payload['sort']);
-        self::assertSame('7', $payload['budget_family_id']);
+        self::assertSame('0', $payload['sort']);
+        self::assertSame('getCategoryList', $transport->calls[1]['method']);
+        self::assertSame([['101']], $transport->calls[1]['arguments']);
     }
 
     public function testCreateCategoryUsesRootParentByDefault(): void
     {
-        $transport = new FakeTransport(['setCategoryList' => []]);
+        $transport = new FakeTransport([
+            'setCategoryList' => [['server_id' => '101']],
+            'getCategoryList' => [['id' => '101', 'parent_id' => '-1', 'name' => 'Food']],
+        ]);
         $service = new CategoryService($transport);
 
         $service->create('Food');
@@ -125,6 +134,27 @@ final class CategoryServiceTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $service->create('   ');
+    }
+
+    public function testCreateCategoryRequiresServerIdInResponse(): void
+    {
+        $service = new CategoryService(new FakeTransport(['setCategoryList' => [[]]]));
+
+        $this->expectException(UnexpectedResponseException::class);
+
+        $service->create('Food');
+    }
+
+    public function testCreateCategoryRequiresCreatedCategoryToBeReadable(): void
+    {
+        $service = new CategoryService(new FakeTransport([
+            'setCategoryList' => [['server_id' => '101']],
+            'getCategoryList' => [],
+        ]));
+
+        $this->expectException(UnexpectedResponseException::class);
+
+        $service->create('Food');
     }
 
     public function testUpdatesCategoryViaSetCategoryList(): void

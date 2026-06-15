@@ -27,6 +27,16 @@ final class FakeTransport implements TransportInterface
             'arguments' => $arguments,
         ];
 
-        return $this->responses[$method] ?? [];
+        $response = $this->responses[$method] ?? [];
+        if (is_array($response) && array_key_exists('__sequence', $response)) {
+            $index = count(array_filter(
+                $this->calls,
+                static fn (array $call): bool => $call['method'] === $method,
+            )) - 1;
+
+            return $response['__sequence'][$index] ?? [];
+        }
+
+        return $response;
     }
 }

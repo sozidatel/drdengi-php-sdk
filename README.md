@@ -91,12 +91,12 @@ foreach ($client->categories()->options(includeHidden: false) as $option) {
 Создание категории расходов:
 
 ```php
-$created = $client->categories()->create(
+$category = $client->categories()->create(
     name: 'Кафе',
     parentId: null, // null означает корневую категорию
 );
 
-$categoryId = $created[0]['server_id'];
+$categoryId = $category->id;
 ```
 
 Источники доходов поддерживают тот же интерфейс:
@@ -138,6 +138,7 @@ $records = $client->records()->list(
 
 ```php
 use Soz\Drebedengi\Model\MoneyAmount;
+use Soz\Drebedengi\Model\ExpenseGroupItem;
 
 $client->records()->createExpense(
     placeId: 'PLACE_ID',
@@ -164,6 +165,20 @@ $client->records()->createTransfer(
     currencyId: 'CURRENCY_ID',
     date: new DateTimeImmutable(),
     comment: 'Перенос между счетами',
+);
+```
+
+Группа расходов, например строки одного чека:
+
+```php
+$client->records()->createExpenseGroup(
+    placeId: 'PLACE_ID',
+    items: [
+        new ExpenseGroupItem('CATEGORY_ID_1', MoneyAmount::fromDecimalString('12.34'), 'Кофе'),
+        ['categoryId' => 'CATEGORY_ID_2', 'amount' => MoneyAmount::fromDecimalString('56.78'), 'comment' => 'Продукты'],
+    ],
+    currencyId: 'CURRENCY_ID',
+    date: new DateTimeImmutable(),
 );
 ```
 
