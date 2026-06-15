@@ -286,8 +286,9 @@ final class LiveRecordWriteTest extends TestCase
             usort($records, static fn ($a, $b): int => $a->comment <=> $b->comment);
             self::assertSame($firstComment, $records[0]->comment);
             self::assertSame($secondComment, $records[1]->comment);
-            self::assertSame($records[0]->id, $records[0]->groupId);
-            self::assertSame($records[0]->id, $records[1]->groupId);
+            self::assertNotNull($records[0]->groupId);
+            self::assertSame($records[0]->groupId, $records[1]->groupId);
+            self::assertNotSame($records[0]->id, $records[0]->groupId);
             self::assertSame($categoryIds[0], $records[0]->budgetObjectId);
             self::assertSame($categoryIds[1], $records[1]->budgetObjectId);
         } finally {

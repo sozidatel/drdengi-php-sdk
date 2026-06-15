@@ -6,7 +6,6 @@ namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
-use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
@@ -93,25 +92,11 @@ final readonly class RecordService
             );
         }
 
-        $first = $items[0];
-        $firstCreated = $this->savePayloads([
-            $this->expensePayload($placeId, $first->categoryId, $first->amount, $currencyId, $date, $first->comment),
-        ]);
-
-        $groupId = $this->extractServerId($firstCreated);
-        if ($groupId === null) {
-            throw new UnexpectedResponseException('Drebedengi setRecordList response does not contain first expense server_id for group_id.');
-        }
-
+        $groupId = (string)$this->clientId();
         $payloads = [];
-        foreach ($items as $index => $item) {
+        foreach ($items as $item) {
             $payload = $this->expensePayload($placeId, $item->categoryId, $item->amount, $currencyId, $date, $item->comment);
             $payload['group_id'] = $groupId;
-
-            if ($index === 0) {
-                unset($payload['client_id']);
-                $payload['server_id'] = $groupId;
-            }
 
             $payloads[] = $payload;
         }
@@ -327,22 +312,6 @@ final readonly class RecordService
             amount: $item['amount'],
             comment: (string)($item['comment'] ?? ''),
         );
-    }
-
-    /**
-     * @param list<array<string, mixed>> $created
-     */
-    private function extractServerId(array $created): ?string
-    {
-        foreach ($created as $item) {
-            foreach (['server_id', 'id'] as $field) {
-                if (array_key_exists($field, $item) && trim((string)$item[$field]) !== '') {
-                    return (string)$item[$field];
-                }
-            }
-        }
-
-        return null;
     }
 
     /**

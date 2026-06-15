@@ -7,7 +7,6 @@ namespace Soz\Drebedengi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
-use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\RecordQuery;
@@ -144,15 +143,10 @@ final class RecordServiceTest extends TestCase
         self::assertArrayNotHasKey('group_id', $payload);
     }
 
-    public function testCreateExpenseGroupBuildsTwoStepGroupedPayload(): void
+    public function testCreateExpenseGroupBuildsOneStepGroupedPayload(): void
     {
         $transport = new FakeTransport([
-            'setRecordList' => [
-                '__sequence' => [
-                    [['server_id' => '100']],
-                    [['server_id' => '100'], ['server_id' => '101']],
-                ],
-            ],
+            'setRecordList' => [['server_id' => '100'], ['server_id' => '101']],
         ]);
         $service = new RecordService(
             $transport,
@@ -170,56 +164,27 @@ final class RecordServiceTest extends TestCase
         );
 
         self::assertSame([['server_id' => '100'], ['server_id' => '101']], $result);
-        self::assertCount(2, $transport->calls);
+        self::assertCount(1, $transport->calls);
 
-        $firstCreatePayload = $transport->calls[0]['arguments'][0][0];
-        self::assertArrayHasKey('client_id', $firstCreatePayload);
-        self::assertArrayNotHasKey('group_id', $firstCreatePayload);
-        self::assertSame('10', $firstCreatePayload['budget_object_id']);
-        self::assertSame(-1234, $firstCreatePayload['sum']);
-
-        $groupedPayloads = $transport->calls[1]['arguments'][0];
+        $groupedPayloads = $transport->calls[0]['arguments'][0];
         self::assertCount(2, $groupedPayloads);
 
-        self::assertSame('100', $groupedPayloads[0]['server_id']);
-        self::assertArrayNotHasKey('client_id', $groupedPayloads[0]);
-        self::assertSame('100', $groupedPayloads[0]['group_id']);
+        self::assertArrayHasKey('client_id', $groupedPayloads[0]);
+        self::assertArrayHasKey('client_id', $groupedPayloads[1]);
+        self::assertArrayNotHasKey('server_id', $groupedPayloads[0]);
+        self::assertArrayNotHasKey('server_id', $groupedPayloads[1]);
+        self::assertNotSame('', $groupedPayloads[0]['group_id']);
+        self::assertSame($groupedPayloads[0]['group_id'], $groupedPayloads[1]['group_id']);
         self::assertSame('10', $groupedPayloads[0]['budget_object_id']);
         self::assertSame(-1234, $groupedPayloads[0]['sum']);
         self::assertSame('Coffee', $groupedPayloads[0]['comment']);
         self::assertSame(3, $groupedPayloads[0]['operation_type']);
         self::assertSame('2026-06-14 12:00:00', $groupedPayloads[0]['operation_date']);
 
-        self::assertArrayHasKey('client_id', $groupedPayloads[1]);
-        self::assertSame('100', $groupedPayloads[1]['group_id']);
         self::assertSame('20', $groupedPayloads[1]['budget_object_id']);
         self::assertSame(-567, $groupedPayloads[1]['sum']);
         self::assertSame('Cake', $groupedPayloads[1]['comment']);
         self::assertSame(3, $groupedPayloads[1]['operation_type']);
-    }
-
-    public function testCreateExpenseGroupRequiresFirstServerId(): void
-    {
-        $transport = new FakeTransport([
-            'setRecordList' => [
-                '__sequence' => [
-                    [[]],
-                ],
-            ],
-        ]);
-        $service = new RecordService($transport);
-
-        $this->expectException(UnexpectedResponseException::class);
-
-        $service->createExpenseGroup(
-            placeId: '1',
-            items: [
-                new ExpenseGroupItem('10', MoneyAmount::fromDecimalString('1.00')),
-                new ExpenseGroupItem('20', MoneyAmount::fromDecimalString('2.00')),
-            ],
-            currencyId: '3',
-            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
-        );
     }
 
     public function testCreateExpenseGroupValidatesArrayItems(): void
