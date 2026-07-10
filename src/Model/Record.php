@@ -27,6 +27,7 @@ final readonly class Record implements \JsonSerializable
         public ?string $groupId,
         public ?string $userId,
         public array $raw,
+        public ?MoneyAmount $balanceAfter = null,
     ) {
     }
 
@@ -86,6 +87,27 @@ final readonly class Record implements \JsonSerializable
         }
 
         return $payload;
+    }
+
+    public function withBalanceAfter(MoneyAmount $balanceAfter): self
+    {
+        return new self(
+            id: $this->id,
+            placeId: $this->placeId,
+            budgetObjectId: $this->budgetObjectId,
+            sum: $this->sum,
+            operationDate: $this->operationDate,
+            comment: $this->comment,
+            currencyId: $this->currencyId,
+            duty: $this->duty,
+            operationType: $this->operationType,
+            serverMoveId: $this->serverMoveId,
+            serverChangeId: $this->serverChangeId,
+            groupId: $this->groupId,
+            userId: $this->userId,
+            raw: $this->raw,
+            balanceAfter: $balanceAfter,
+        );
     }
 
     public function jsonSerialize(): array

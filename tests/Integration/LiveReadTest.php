@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
 final class LiveReadTest extends TestCase
@@ -22,5 +23,12 @@ final class LiveReadTest extends TestCase
         self::assertIsArray($client->tags()->list());
         self::assertIsArray($client->balance()->list());
         self::assertIsArray($client->records()->list());
+
+        $recordsWithBalance = $client->records()->list(
+            (new RecordQuery())->last20()->withBalanceAfter(),
+        );
+        foreach ($recordsWithBalance as $record) {
+            self::assertNotNull($record->balanceAfter);
+        }
     }
 }

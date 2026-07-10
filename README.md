@@ -127,10 +127,18 @@ $records = $client->records()->list(
     )
         ->onlyPlaces(['11416426'])
         ->onlyCategories(['CATEGORY_ID'])
+        ->withBalanceAfter()
 );
+
+foreach ($records as $record) {
+    echo $record->balanceAfter?->toDecimalString();
+}
 ```
 
 По умолчанию `RecordQuery` использует `r_currency=0`, то есть оригинальную валюту операции.
+`withBalanceAfter()` добавляет в каждый `Record` поле `balanceAfter` с остатком на счёте сразу
+после операции. Расчёт доступен только для оригинальной валюты и может выполнить дополнительный
+`getRecordList`, если исходный запрос содержит фильтры, а также один `getBalance`.
 
 ## Создание операций
 

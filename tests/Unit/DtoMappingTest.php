@@ -93,6 +93,11 @@ final class DtoMappingTest extends TestCase
         self::assertSame(-1234, $record->sum->minorUnits);
         self::assertSame('2026-06-14 12:00:00', $record->operationDate->format('Y-m-d H:i:s'));
         self::assertSame(3, $record->operationType->value);
+        self::assertNull($record->balanceAfter);
+
+        $withBalance = $record->withBalanceAfter(\Soz\Drebedengi\Model\MoneyAmount::fromMinorUnits(5678));
+        self::assertSame(5678, $withBalance->balanceAfter?->minorUnits);
+        self::assertNull($record->balanceAfter);
     }
 
     public function testParsesRecordDateInAccountTimezone(): void

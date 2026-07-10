@@ -31,10 +31,25 @@ final readonly class RecordService
     public function list(?RecordQuery $query = null): array
     {
         $query ??= (new RecordQuery())->last20();
+        $params = $query->toSoapParams($this->options->timezone);
 
-        return array_map(fn (array $item): Record => Record::fromSoap($item, $this->options->timezone), DrebedengiNormalizer::listOfArrays(
-            $this->transport->call('getRecordList', [$query->toSoapParams($this->options->timezone), []]),
-        ));
+        if ($query->shouldIncludeBalanceAfter() && (string)$params['r_currency'] !== '0') {
+            throw new InvalidArgumentException('Balance after a record is only available in the original currency.');
+        }
+
+        $rows = DrebedengiNormalizer::listOfArrays(
+            $this->transport->call('getRecordList', [$params, []]),
+        );
+        $records = array_map(
+            fn (array $item): Record => Record::fromSoap($item, $this->options->timezone),
+            $rows,
+        );
+
+        if (!$query->shouldIncludeBalanceAfter() || $records === []) {
+            return $records;
+        }
+
+        return $this->addBalanceAfter($records, $rows, $params);
     }
 
     /**
@@ -264,6 +279,98 @@ final readonly class RecordService
     private function clientId(): int
     {
         return random_int(1, 999_999_999);
+    }
+
+    /**
+     * @param list<Record> $records
+     * @param list<array<string, mixed>> $queriedRows
+     * @param array<string, mixed> $params
+     * @return list<Record>
+     */
+    private function addBalanceAfter(array $records, array $queriedRows, array $params): array
+    {
+        [$from, $to] = $this->balanceDateRange($records, $params);
+        $allRows = $this->canReuseRowsForBalance($params)
+            ? $queriedRows
+            : DrebedengiNormalizer::listOfArrays($this->transport->call('getRecordList', [[
+                'is_report' => false,
+                'is_show_duty' => true,
+                'r_period' => 0,
+                'period_from' => $from,
+                'period_to' => $to,
+                'r_how' => 1,
+                'r_what' => OperationType::All->value,
+                'r_currency' => 0,
+                'r_is_place' => 0,
+                'r_is_tag' => 0,
+                'r_is_category' => 0,
+            ], []]));
+
+        $balances = [];
+        foreach (DrebedengiNormalizer::listOfArrays($this->transport->call('getBalance', [[
+            'restDate' => $to,
+            'is_with_accum' => false,
+            'is_with_duty' => false,
+        ]])) as $balance) {
+            $balances[$this->balanceKey($balance)] = (int)($balance['sum'] ?? 0);
+        }
+
+        $balanceAfterById = [];
+        // Drebedengi returns records newest first, so unwind them from the end-of-day balance.
+        foreach ($allRows as $row) {
+            $key = $this->balanceKey($row);
+            $balanceAfterById[DrebedengiNormalizer::string($row['id'] ?? $row['server_id'] ?? '')] = $balances[$key] ?? 0;
+            $balances[$key] = ($balances[$key] ?? 0) - (int)($row['sum'] ?? 0);
+        }
+
+        return array_map(
+            static fn (Record $record): Record => array_key_exists($record->id, $balanceAfterById)
+                ? $record->withBalanceAfter(MoneyAmount::fromMinorUnits($balanceAfterById[$record->id]))
+                : $record,
+            $records,
+        );
+    }
+
+    /**
+     * @param list<Record> $records
+     * @param array<string, mixed> $params
+     * @return array{string, string}
+     */
+    private function balanceDateRange(array $records, array $params): array
+    {
+        if ((int)$params['r_period'] === 0) {
+            return [(string)$params['period_from'], (string)$params['period_to']];
+        }
+
+        $dates = array_map(
+            fn (Record $record): string => DrebedengiDateTime::formatDate($record->operationDate, $this->options->timezone),
+            $records,
+        );
+
+        return [min($dates), max($dates)];
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    private function canReuseRowsForBalance(array $params): bool
+    {
+        return (int)$params['r_period'] === 0
+            && (int)$params['r_what'] === OperationType::All->value
+            && (string)$params['r_currency'] === '0'
+            && (int)$params['r_is_place'] === 0
+            && (int)$params['r_is_tag'] === 0
+            && (int)$params['r_is_category'] === 0;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function balanceKey(array $row): string
+    {
+        return DrebedengiNormalizer::string($row['place_id'] ?? '')
+            . ':'
+            . DrebedengiNormalizer::string($row['currency_id'] ?? '');
     }
 
     /**

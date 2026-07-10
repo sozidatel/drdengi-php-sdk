@@ -219,5 +219,114 @@ final class RecordServiceTest extends TestCase
         $params = $transport->calls[0]['arguments'][0];
         self::assertSame('2026-06-14', $params['period_from']);
         self::assertSame('2026-06-15', $params['period_to']);
+        self::assertCount(1, $transport->calls);
+        self::assertSame('getRecordList', $transport->calls[0]['method']);
+    }
+
+    public function testAddsBalanceAfterToFilteredRecords(): void
+    {
+        $targetRow = [
+            'id' => '2',
+            'place_id' => '1',
+            'budget_object_id' => '20',
+            'sum' => '-200',
+            'operation_date' => '2026-01-02 10:00:00',
+            'currency_id' => '3',
+            'operation_type' => '3',
+        ];
+        $allRows = [
+            [
+                'id' => '3',
+                'place_id' => '1',
+                'budget_object_id' => '30',
+                'sum' => '100',
+                'operation_date' => '2026-01-02 12:00:00',
+                'currency_id' => '3',
+                'operation_type' => '2',
+            ],
+            $targetRow,
+            [
+                'id' => '1',
+                'place_id' => '1',
+                'budget_object_id' => '10',
+                'sum' => '500',
+                'operation_date' => '2026-01-01 09:00:00',
+                'currency_id' => '3',
+                'operation_type' => '2',
+            ],
+        ];
+        $transport = new FakeTransport([
+            'getRecordList' => ['__sequence' => [[$targetRow], $allRows]],
+            'getBalance' => [[
+                'place_id' => '1',
+                'currency_id' => '3',
+                'sum' => '400',
+            ]],
+        ]);
+        $service = new RecordService($transport);
+
+        $records = $service->list(
+            RecordQuery::forDateRange(
+                new \DateTimeImmutable('2026-01-01'),
+                new \DateTimeImmutable('2026-01-02'),
+            )->onlyCategories(['20'])->withBalanceAfter(),
+        );
+
+        self::assertSame(300, $records[0]->balanceAfter?->minorUnits);
+        self::assertSame(['getRecordList', 'getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
+        self::assertSame(0, $transport->calls[1]['arguments'][0]['r_is_category']);
+        self::assertSame('2026-01-02', $transport->calls[2]['arguments'][0]['restDate']);
+    }
+
+    public function testReusesUnfilteredDateRangeRowsForBalanceCalculation(): void
+    {
+        $row = [
+            'id' => '1',
+            'place_id' => '1',
+            'budget_object_id' => '10',
+            'sum' => '500',
+            'operation_date' => '2026-01-01 09:00:00',
+            'currency_id' => '3',
+            'operation_type' => '2',
+        ];
+        $transport = new FakeTransport([
+            'getRecordList' => [$row],
+            'getBalance' => [[
+                'place_id' => '1',
+                'currency_id' => '3',
+                'sum' => '500',
+            ]],
+        ]);
+        $service = new RecordService($transport);
+
+        $records = $service->list(
+            RecordQuery::forDateRange(
+                new \DateTimeImmutable('2026-01-01'),
+                new \DateTimeImmutable('2026-01-01'),
+            )->withBalanceAfter(),
+        );
+
+        self::assertSame(500, $records[0]->balanceAfter?->minorUnits);
+        self::assertSame(['getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
+    }
+
+    public function testRejectsBalanceAfterForConvertedCurrencyBeforeCallingSoap(): void
+    {
+        $transport = new FakeTransport();
+        $service = new RecordService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('original currency');
+
+        try {
+            $service->list(
+                RecordQuery::forDateRange(
+                    new \DateTimeImmutable('2026-01-01'),
+                    new \DateTimeImmutable('2026-01-02'),
+                )->convertedToCurrency('3')->withBalanceAfter(),
+            );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
     }
 }

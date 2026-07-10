@@ -37,4 +37,15 @@ final class RecordQueryTest extends TestCase
         self::assertSame(1, $params['r_is_category']);
         self::assertSame(['10', '20'], $params['r_category']);
     }
+
+    public function testCanRequestBalanceAfterWithoutSendingWebOnlySoapParameter(): void
+    {
+        $query = RecordQuery::forDateRange(
+            new \DateTimeImmutable('2026-01-01'),
+            new \DateTimeImmutable('2026-01-31'),
+        )->withBalanceAfter();
+
+        self::assertTrue($query->shouldIncludeBalanceAfter());
+        self::assertArrayNotHasKey('is_with_rest', $query->toSoapParams());
+    }
 }

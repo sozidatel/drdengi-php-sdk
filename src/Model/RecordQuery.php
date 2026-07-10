@@ -26,6 +26,7 @@ final class RecordQuery
     private int $categoryFilter = 0;
     /** @var list<string> */
     private array $categoryIds = [];
+    private bool $withBalanceAfter = false;
 
     public static function forDateRange(\DateTimeInterface $from, \DateTimeInterface $to): self
     {
@@ -111,6 +112,18 @@ final class RecordQuery
         $this->currencyId = $currencyId;
 
         return $this;
+    }
+
+    public function withBalanceAfter(bool $enabled = true): self
+    {
+        $this->withBalanceAfter = $enabled;
+
+        return $this;
+    }
+
+    public function shouldIncludeBalanceAfter(): bool
+    {
+        return $this->withBalanceAfter;
     }
 
     /**
