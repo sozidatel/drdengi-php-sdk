@@ -13,6 +13,8 @@ use Soz\Drebedengi\Exception\TransportException;
 
 final class SoapTransport implements TransportInterface
 {
+    private const ENDPOINT_TIMEOUT_MESSAGE = 'Сервер слишком долго не отвечает';
+
     private ?SoapClient $client = null;
 
     /**
@@ -40,9 +42,10 @@ final class SoapTransport implements TransportInterface
 
             throw new $exceptionClass(
                 $this->sanitize(sprintf(
-                    'Drebedengi SOAP call "%s" at %s failed: %s',
+                    'Drebedengi SOAP call "%s" at %s failed [%s]: %s',
                     $method,
                     $this->endpoint->baseUri(),
+                    (string)($exception->faultcode ?? 'unknown'),
                     $exception->getMessage(),
                 )),
                 0,
@@ -85,10 +88,20 @@ final class SoapTransport implements TransportInterface
     {
         $faultCode = strtoupper((string)($exception->faultcode ?? ''));
 
-        return $faultCode === 'HTTP'
+        if ($faultCode === 'HTTP'
             || $faultCode === 'WSDL'
             || str_ends_with($faultCode, ':HTTP')
-            || str_ends_with($faultCode, ':WSDL');
+            || str_ends_with($faultCode, ':WSDL')) {
+            return true;
+        }
+
+        // Drebedengi can report its own upstream timeout as a generic Server
+        // SOAP fault, so the fault code alone cannot distinguish it from a
+        // business error. Keep this exception deliberately exact and narrow.
+        $message = rtrim(trim($exception->getMessage()), '.');
+
+        return ($faultCode === 'SERVER' || str_ends_with($faultCode, ':SERVER'))
+            && $message === self::ENDPOINT_TIMEOUT_MESSAGE;
     }
 
     private function sanitize(string $message): string

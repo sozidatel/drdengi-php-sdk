@@ -46,6 +46,35 @@ final class SoapTransportTest extends TestCase
         }
     }
 
+    public function testKnownDrebedengiServerTimeoutIsClassifiedForFailover(): void
+    {
+        $transport = $this->transportThrowing(
+            new SoapFault('SOAP-ENV:Server', 'Сервер слишком долго не отвечает.'),
+        );
+
+        try {
+            $transport->call('getBalance');
+            self::fail('Expected endpoint timeout.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertStringContainsString('[SOAP-ENV:Server]', $exception->getMessage());
+            self::assertStringContainsString('Сервер слишком долго не отвечает', $exception->getMessage());
+        }
+    }
+
+    public function testSameMessageWithClientFaultCodeIsNotClassifiedForFailover(): void
+    {
+        $transport = $this->transportThrowing(
+            new SoapFault('SOAP-ENV:Client', 'Сервер слишком долго не отвечает'),
+        );
+
+        try {
+            $transport->call('getBalance');
+            self::fail('Expected SOAP transport exception.');
+        } catch (TransportException $exception) {
+            self::assertNotInstanceOf(EndpointUnavailableException::class, $exception);
+        }
+    }
+
     public function testCredentialsAreRedactedFromExceptionMessages(): void
     {
         $credentials = new Credentials('api-secret', 'login-secret', 'password-secret');
