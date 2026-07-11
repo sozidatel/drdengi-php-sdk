@@ -9,6 +9,7 @@ use Soz\Drebedengi\Exception\InvalidArgumentException;
 final readonly class Endpoint
 {
     public const DEFAULT_BASE_URI = 'https://www.drebedengi.me';
+    public const FALLBACK_BASE_URI = 'https://www.drebedengi.ru';
 
     private string $baseUri;
 
@@ -35,5 +36,20 @@ final readonly class Endpoint
     public function soapLocation(): string
     {
         return $this->baseUri . '/soap/';
+    }
+
+    /**
+     * @return non-empty-list<self>
+     */
+    public function failoverSequence(): array
+    {
+        if ($this->baseUri !== self::DEFAULT_BASE_URI) {
+            return [$this];
+        }
+
+        return [
+            $this,
+            new self(self::FALLBACK_BASE_URI),
+        ];
     }
 }

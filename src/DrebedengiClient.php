@@ -14,6 +14,7 @@ use Soz\Drebedengi\Service\RecordService;
 use Soz\Drebedengi\Service\SourceService;
 use Soz\Drebedengi\Service\SyncService;
 use Soz\Drebedengi\Service\TagService;
+use Soz\Drebedengi\Transport\FailoverTransport;
 use Soz\Drebedengi\Transport\SoapTransport;
 use Soz\Drebedengi\Transport\TransportInterface;
 
@@ -40,10 +41,19 @@ final class DrebedengiClient
             $options = null;
         }
 
-        return new self(
-            new SoapTransport($credentials, $endpoint ?? new Endpoint(), $soapOptions),
-            $options ?? new ClientOptions(),
-        );
+        $endpoint ??= new Endpoint();
+        $endpoints = $endpoint->failoverSequence();
+        $transport = new SoapTransport($credentials, $endpoint, $soapOptions);
+
+        if (count($endpoints) > 1) {
+            $transports = [];
+            foreach ($endpoints as $candidate) {
+                $transports[$candidate->baseUri()] = new SoapTransport($credentials, $candidate, $soapOptions);
+            }
+            $transport = new FailoverTransport($transports);
+        }
+
+        return new self($transport, $options ?? new ClientOptions());
     }
 
     public function records(): RecordService

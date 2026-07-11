@@ -1,0 +1,93 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Soz\Drebedengi\Tests\Unit;
+
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use SoapClient;
+use SoapFault;
+use Soz\Drebedengi\Credentials;
+use Soz\Drebedengi\Endpoint;
+use Soz\Drebedengi\Exception\EndpointUnavailableException;
+use Soz\Drebedengi\Exception\TransportException;
+use Soz\Drebedengi\Transport\SoapTransport;
+
+final class SoapTransportTest extends TestCase
+{
+    #[DataProvider('infrastructureFaultCodes')]
+    public function testExplicitInfrastructureFaultCodesAreClassifiedForFailover(string $faultCode): void
+    {
+        $transport = $this->transportThrowing(new SoapFault($faultCode, 'Network unavailable'));
+
+        $this->expectException(EndpointUnavailableException::class);
+        $transport->call('getBalance');
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function infrastructureFaultCodes(): iterable
+    {
+        yield 'HTTP' => ['HTTP'];
+        yield 'WSDL' => ['WSDL'];
+        yield 'namespaced HTTP' => ['SOAP-ENV:HTTP'];
+    }
+
+    public function testApplicationSoapFaultIsNotClassifiedForFailover(): void
+    {
+        $transport = $this->transportThrowing(new SoapFault('SOAP-ENV:Server', 'Business rule rejected'));
+
+        try {
+            $transport->call('getBalance');
+            self::fail('Expected SOAP transport exception.');
+        } catch (TransportException $exception) {
+            self::assertNotInstanceOf(EndpointUnavailableException::class, $exception);
+            self::assertStringContainsString('Business rule rejected', $exception->getMessage());
+        }
+    }
+
+    public function testCredentialsAreRedactedFromExceptionMessages(): void
+    {
+        $credentials = new Credentials('api-secret', 'login-secret', 'password-secret');
+        $transport = $this->transportThrowing(
+            new SoapFault('SOAP-ENV:Server', 'api-secret login-secret password-secret'),
+            $credentials,
+        );
+
+        try {
+            $transport->call('getAccessStatus');
+            self::fail('Expected SOAP transport exception.');
+        } catch (TransportException $exception) {
+            self::assertStringNotContainsString($credentials->apiId, $exception->getMessage());
+            self::assertStringNotContainsString($credentials->login, $exception->getMessage());
+            self::assertStringNotContainsString($credentials->password, $exception->getMessage());
+            self::assertStringContainsString('[redacted]', $exception->getMessage());
+        }
+    }
+
+    private function transportThrowing(
+        SoapFault $fault,
+        ?Credentials $credentials = null,
+    ): SoapTransport {
+        $transport = new SoapTransport(
+            $credentials ?? new Credentials('api', 'login', 'password'),
+            new Endpoint(),
+        );
+        $property = new \ReflectionProperty($transport, 'client');
+        $property->setValue($transport, new ThrowingSoapClient($fault));
+
+        return $transport;
+    }
+}
+
+final class ThrowingSoapClient extends SoapClient
+{
+    public function __construct(private readonly SoapFault $fault)
+    {
+    }
+
+    public function __call(string $name, array $args): mixed
+    {
+        throw $this->fault;
+    }
+}
