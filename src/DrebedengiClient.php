@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi;
 
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Service\BalanceService;
 use Soz\Drebedengi\Service\AccountService;
 use Soz\Drebedengi\Service\CategoryService;
@@ -28,11 +29,12 @@ final class DrebedengiClient
     }
 
     /**
+     * @param Endpoint|string|list<Endpoint|string>|null $endpoint
      * @param array<string, mixed> $soapOptions
      */
     public static function fromCredentials(
         Credentials $credentials,
-        ?Endpoint $endpoint = null,
+        Endpoint|string|array|null $endpoint = null,
         ClientOptions|array|null $options = null,
         array $soapOptions = [],
     ): self {
@@ -41,19 +43,48 @@ final class DrebedengiClient
             $options = null;
         }
 
-        $endpoint ??= new Endpoint();
-        $endpoints = $endpoint->failoverSequence();
-        $transport = new SoapTransport($credentials, $endpoint, $soapOptions);
-
-        if (count($endpoints) > 1) {
-            $transports = [];
-            foreach ($endpoints as $candidate) {
-                $transports[$candidate->baseUri()] = new SoapTransport($credentials, $candidate, $soapOptions);
-            }
-            $transport = new FailoverTransport($transports);
+        $endpoints = self::normalizeEndpoints($endpoint);
+        $transports = [];
+        foreach ($endpoints as $candidate) {
+            $transports[$candidate->baseUri()] = new SoapTransport($credentials, $candidate, $soapOptions);
         }
 
+        $transport = count($transports) === 1
+            ? array_values($transports)[0]
+            : new FailoverTransport($transports);
+
         return new self($transport, $options ?? new ClientOptions());
+    }
+
+    /**
+     * @param Endpoint|string|list<Endpoint|string>|null $endpoint
+     * @return non-empty-list<Endpoint>
+     */
+    private static function normalizeEndpoints(Endpoint|string|array|null $endpoint): array
+    {
+        $values = $endpoint === null
+            ? [new Endpoint()]
+            : (is_array($endpoint) ? $endpoint : [$endpoint]);
+
+        if ($values === []) {
+            throw new InvalidArgumentException('At least one Drebedengi endpoint must be configured.');
+        }
+
+        $endpoints = [];
+        foreach ($values as $value) {
+            if ($value instanceof Endpoint) {
+                $endpoints[] = $value;
+                continue;
+            }
+            if (is_string($value)) {
+                $endpoints[] = new Endpoint($value);
+                continue;
+            }
+
+            throw new InvalidArgumentException('Drebedengi endpoints must be Endpoint objects or base URI strings.');
+        }
+
+        return $endpoints;
     }
 
     public function records(): RecordService

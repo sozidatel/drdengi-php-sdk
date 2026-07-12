@@ -25,20 +25,43 @@ use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Endpoint;
 
+$credentials = new Credentials(
+    apiId: getenv('DREB_API_ID'),
+    login: getenv('DREB_LOGIN'),
+    password: getenv('DREB_PASSWORD'),
+);
+
 $client = DrebedengiClient::fromCredentials(
-    new Credentials(
-        apiId: getenv('DREB_API_ID'),
-        login: getenv('DREB_LOGIN'),
-        password: getenv('DREB_PASSWORD'),
-    ),
-    new Endpoint(getenv('DREB_BASE_URI') ?: Endpoint::DEFAULT_BASE_URI),
-    new ClientOptions(new DateTimeZone('Europe/Podgorica')),
+    $credentials,
+    options: new ClientOptions(new DateTimeZone('Europe/Podgorica')),
 );
 ```
 
-`Endpoint` нужен не только для `drebedengi.me`, но и для кастомных доменов индивидуальных установок. SDK переопределяет SOAP `location`, потому что официальный WSDL указывает `http://www.drebedengi.ru/soap/`.
+По умолчанию SDK обращается только к основному SaaS-серверу `Endpoint::RU_BASE_URI`. Сервер можно передать как base URL или как объект `Endpoint`:
 
-Для стандартного `new Endpoint()` SDK использует официальную последовательность `drebedengi.me` → `drebedengi.ru` и запоминает первый ответивший домен на время жизни клиента. Read-only вызов можно повторить на втором домене после сетевого сбоя. Перед первой операцией записи SDK выбирает домен безопасным `getAccessStatus`, а саму запись отправляет только один раз: неоднозначный сбой после отправки не приводит к автоматическому повтору. Явно заданный нестандартный endpoint работает без скрытого fallback.
+```php
+// Официальное ME-зеркало.
+$meClient = DrebedengiClient::fromCredentials($credentials, Endpoint::ME_BASE_URI);
+
+// Self-hosted установка с путём. SDK добавит /soap/dd.wsdl и /soap/.
+$selfHostedClient = DrebedengiClient::fromCredentials(
+    $credentials,
+    'https://money.example.com/drebedengi',
+);
+```
+
+SDK не добавляет скрытые fallback-серверы. Чтобы включить failover, передайте два или больше base URL в нужном порядке:
+
+```php
+$client = DrebedengiClient::fromCredentials(
+    $credentials,
+    [Endpoint::RU_BASE_URI, Endpoint::ME_BASE_URI],
+);
+```
+
+Первый ответивший endpoint запоминается на время жизни клиента. Read-only вызов можно повторить на следующем endpoint после инфраструктурного сбоя. Перед первой операцией записи SDK выбирает endpoint безопасным `getAccessStatus`, а саму запись отправляет только один раз: неоднозначный сбой после отправки не приводит к автоматическому повтору. Credentials передаются каждому endpoint из явно заданного списка, поэтому добавляйте только доверенные серверы.
+
+SDK переопределяет SOAP `location`, потому что официальный WSDL может указывать другой адрес сервиса.
 
 Дребеденьги передают даты операций как `YYYY-MM-DD HH:MM:SS` без timezone. SDK не нашел timezone в SOAP-методах аккаунта, поэтому timezone аккаунта нужно задавать явно через `ClientOptions`. Если не задать, будет использована `date_default_timezone_get()`.
 
@@ -238,7 +261,7 @@ $accums = $client->raw()->call('getAccumList', [[]]);
 Скопируй `.env.example` в `.env` и заполни тестовый аккаунт:
 
 ```dotenv
-DREB_TEST_BASE_URI=https://www.drebedengi.me
+DREB_TEST_BASE_URI=https://www.drebedengi.ru
 DREB_TEST_API_ID=
 DREB_TEST_LOGIN=
 DREB_TEST_PASSWORD=

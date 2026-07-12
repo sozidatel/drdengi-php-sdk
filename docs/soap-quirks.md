@@ -4,7 +4,7 @@
 
 ## Endpoint
 
-Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены.
+Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены. По умолчанию используется только `Endpoint::RU_BASE_URI`; зеркало ME или последовательность failover нужно указывать явно.
 
 ## anyType
 

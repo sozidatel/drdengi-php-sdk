@@ -8,8 +8,12 @@ use Soz\Drebedengi\Exception\InvalidArgumentException;
 
 final readonly class Endpoint
 {
-    public const DEFAULT_BASE_URI = 'https://www.drebedengi.me';
-    public const FALLBACK_BASE_URI = 'https://www.drebedengi.ru';
+    public const RU_BASE_URI = 'https://www.drebedengi.ru';
+    public const ME_BASE_URI = 'https://www.drebedengi.me';
+    public const DEFAULT_BASE_URI = self::RU_BASE_URI;
+
+    /** @deprecated Use RU_BASE_URI. */
+    public const FALLBACK_BASE_URI = self::RU_BASE_URI;
 
     private string $baseUri;
 
@@ -39,17 +43,11 @@ final readonly class Endpoint
     }
 
     /**
+     * @deprecated Configure an explicit endpoint list in DrebedengiClient::fromCredentials().
      * @return non-empty-list<self>
      */
     public function failoverSequence(): array
     {
-        if ($this->baseUri !== self::DEFAULT_BASE_URI) {
-            return [$this];
-        }
-
-        return [
-            $this,
-            new self(self::FALLBACK_BASE_URI),
-        ];
+        return [$this];
     }
 }

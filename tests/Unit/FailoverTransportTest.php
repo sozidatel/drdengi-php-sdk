@@ -9,6 +9,7 @@ use Soz\Drebedengi\Credentials;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Endpoint;
 use Soz\Drebedengi\Exception\EndpointUnavailableException;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\TransportException;
 use Soz\Drebedengi\Transport\FailoverTransport;
 use Soz\Drebedengi\Transport\SoapTransport;
@@ -141,18 +142,17 @@ final class FailoverTransportTest extends TestCase
         self::assertSame(['getAccessStatus', 'futureApiMethod'], $primary->methods());
     }
 
-    public function testDefaultEndpointIncludesOfficialFallback(): void
+    public function testDefaultEndpointUsesRuWithoutHiddenFallback(): void
     {
-        self::assertSame(
-            [Endpoint::DEFAULT_BASE_URI, Endpoint::FALLBACK_BASE_URI],
-            array_map(
-                static fn (Endpoint $endpoint): string => $endpoint->baseUri(),
-                (new Endpoint())->failoverSequence(),
-            ),
-        );
+        $endpoint = new Endpoint();
+        self::assertSame(Endpoint::RU_BASE_URI, Endpoint::DEFAULT_BASE_URI);
+        self::assertSame(Endpoint::RU_BASE_URI, $endpoint->baseUri());
+        self::assertSame([$endpoint], $endpoint->failoverSequence());
 
-        $client = DrebedengiClient::fromCredentials($this->credentials(), new Endpoint());
-        self::assertInstanceOf(FailoverTransport::class, $this->clientTransport($client));
+        $client = DrebedengiClient::fromCredentials($this->credentials());
+        $transport = $this->clientTransport($client);
+        self::assertInstanceOf(SoapTransport::class, $transport);
+        self::assertSame(Endpoint::RU_BASE_URI, $this->soapEndpoint($transport)->baseUri());
     }
 
     public function testCustomEndpointDoesNotReceiveHiddenFallback(): void
@@ -162,6 +162,52 @@ final class FailoverTransportTest extends TestCase
         self::assertSame([$endpoint], $endpoint->failoverSequence());
         $client = DrebedengiClient::fromCredentials($this->credentials(), $endpoint);
         self::assertInstanceOf(SoapTransport::class, $this->clientTransport($client));
+    }
+
+    public function testEndpointCanBePassedAsBaseUriStringWithPath(): void
+    {
+        $client = DrebedengiClient::fromCredentials(
+            $this->credentials(),
+            'https://money.example.test/drebedengi/',
+        );
+        $transport = $this->clientTransport($client);
+        self::assertInstanceOf(SoapTransport::class, $transport);
+
+        $endpoint = $this->soapEndpoint($transport);
+        self::assertSame('https://money.example.test/drebedengi', $endpoint->baseUri());
+        self::assertSame('https://money.example.test/drebedengi/soap/dd.wsdl', $endpoint->wsdlUri());
+        self::assertSame('https://money.example.test/drebedengi/soap/', $endpoint->soapLocation());
+    }
+
+    public function testExplicitEndpointListEnablesFailoverInGivenOrder(): void
+    {
+        $client = DrebedengiClient::fromCredentials(
+            $this->credentials(),
+            [Endpoint::ME_BASE_URI, new Endpoint(Endpoint::RU_BASE_URI)],
+        );
+        $transport = $this->clientTransport($client);
+        self::assertInstanceOf(FailoverTransport::class, $transport);
+
+        self::assertSame(
+            [Endpoint::ME_BASE_URI, Endpoint::RU_BASE_URI],
+            array_keys($this->failoverTransports($transport)),
+        );
+    }
+
+    public function testEmptyEndpointListIsRejected(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('At least one Drebedengi endpoint');
+
+        DrebedengiClient::fromCredentials($this->credentials(), []);
+    }
+
+    public function testInvalidEndpointListItemIsRejected(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Endpoint objects or base URI strings');
+
+        DrebedengiClient::fromCredentials($this->credentials(), [Endpoint::RU_BASE_URI, 42]);
     }
 
     public function testSoapOptionsArePreservedForEveryOfficialEndpoint(): void
@@ -180,15 +226,14 @@ final class FailoverTransportTest extends TestCase
         ];
         $client = DrebedengiClient::fromCredentials(
             $this->credentials(),
-            new Endpoint(),
+            [Endpoint::RU_BASE_URI, Endpoint::ME_BASE_URI],
             $soapOptions,
         );
         $failover = $this->clientTransport($client);
         self::assertInstanceOf(FailoverTransport::class, $failover);
 
-        $transportsProperty = new \ReflectionProperty($failover, 'transports');
         $optionsProperty = new \ReflectionProperty(SoapTransport::class, 'soapOptions');
-        foreach ($transportsProperty->getValue($failover) as $transport) {
+        foreach ($this->failoverTransports($failover) as $transport) {
             self::assertSame($soapOptions, $optionsProperty->getValue($transport));
         }
     }
@@ -204,8 +249,8 @@ final class FailoverTransportTest extends TestCase
             $transport->call('getBalance');
             self::fail('Expected endpoint failure.');
         } catch (EndpointUnavailableException $exception) {
-            self::assertStringContainsString(Endpoint::DEFAULT_BASE_URI, $exception->getMessage());
-            self::assertStringContainsString(Endpoint::FALLBACK_BASE_URI, $exception->getMessage());
+            self::assertStringContainsString(Endpoint::RU_BASE_URI, $exception->getMessage());
+            self::assertStringContainsString(Endpoint::ME_BASE_URI, $exception->getMessage());
         }
     }
 
@@ -214,8 +259,8 @@ final class FailoverTransportTest extends TestCase
         TransportInterface $fallback,
     ): FailoverTransport {
         return new FailoverTransport([
-            Endpoint::DEFAULT_BASE_URI => $primary,
-            Endpoint::FALLBACK_BASE_URI => $fallback,
+            Endpoint::RU_BASE_URI => $primary,
+            Endpoint::ME_BASE_URI => $fallback,
         ]);
     }
 
@@ -229,6 +274,21 @@ final class FailoverTransportTest extends TestCase
         $property = new \ReflectionProperty($client, 'transport');
 
         return $property->getValue($client);
+    }
+
+    private function soapEndpoint(SoapTransport $transport): Endpoint
+    {
+        $property = new \ReflectionProperty($transport, 'endpoint');
+
+        return $property->getValue($transport);
+    }
+
+    /** @return array<string, TransportInterface> */
+    private function failoverTransports(FailoverTransport $transport): array
+    {
+        $property = new \ReflectionProperty($transport, 'transports');
+
+        return $property->getValue($transport);
     }
 }
 
