@@ -91,6 +91,12 @@ final class SoapTransportTest extends TestCase
             self::assertStringNotContainsString($credentials->login, $exception->getMessage());
             self::assertStringNotContainsString($credentials->password, $exception->getMessage());
             self::assertStringContainsString('[redacted]', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+
+            $trace = var_export($exception->getTrace(), true);
+            self::assertStringNotContainsString($credentials->apiId, $trace);
+            self::assertStringNotContainsString($credentials->login, $trace);
+            self::assertStringNotContainsString($credentials->password, $trace);
         }
     }
 

@@ -49,7 +49,6 @@ final class SoapTransport implements TransportInterface
                     $exception->getMessage(),
                 )),
                 0,
-                $exception,
             );
         }
     }
@@ -77,7 +76,6 @@ final class SoapTransport implements TransportInterface
                     $exception->getMessage(),
                 )),
                 0,
-                $exception,
             );
         }
 

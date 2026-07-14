@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\BalanceItem;
 use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\Place;
@@ -178,5 +179,21 @@ final class DtoMappingTest extends TestCase
         self::assertSame(8, $btc->decimalPlaces);
         self::assertSame(1_000_000, $btc->ratio);
         self::assertTrue($btc->investing);
+    }
+
+    public function testRejectsRecordWithoutRequiredFinancialFields(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('record ID');
+
+        Record::fromSoap([]);
+    }
+
+    public function testRejectsBalanceWithoutRequiredFinancialFields(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('place_id');
+
+        BalanceItem::fromSoap([]);
     }
 }

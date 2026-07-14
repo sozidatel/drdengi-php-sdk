@@ -141,6 +141,14 @@ final class RecordQuery
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
 
+        if (($this->tagFilter !== 0 || $this->categoryFilter !== 0)
+            && $this->what !== OperationType::Expense
+            && $this->what !== OperationType::Income) {
+            throw new InvalidArgumentException(
+                'RecordQuery tag and category filters require OperationType::Expense or OperationType::Income.',
+            );
+        }
+
         $params = [
             // Detail report mode is a side-effect-free ledger read. The legacy
             // is_report=false mode is reserved for SyncService::initialRecords().

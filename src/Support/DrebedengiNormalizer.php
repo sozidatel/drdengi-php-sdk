@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Support;
 
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
+
 final class DrebedengiNormalizer
 {
     public static function bool(mixed $value): bool
@@ -33,14 +35,23 @@ final class DrebedengiNormalizer
     public static function listOfArrays(mixed $value): array
     {
         if (!is_array($value)) {
-            return [];
+            throw new UnexpectedResponseException(sprintf(
+                'Expected Drebedengi SOAP list response, got %s.',
+                get_debug_type($value),
+            ));
         }
 
         $result = [];
-        foreach ($value as $item) {
-            if (is_array($item)) {
-                $result[] = $item;
+        foreach ($value as $key => $item) {
+            if (!is_array($item) || $item === []) {
+                throw new UnexpectedResponseException(sprintf(
+                    'Expected Drebedengi SOAP list item at key "%s" to be a non-empty array, got %s.',
+                    (string)$key,
+                    is_array($item) ? 'empty array' : get_debug_type($item),
+                ));
             }
+
+            $result[] = $item;
         }
 
         return $result;

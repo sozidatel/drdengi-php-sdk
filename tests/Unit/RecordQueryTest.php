@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\RecordQuery;
 
@@ -41,6 +42,19 @@ final class RecordQueryTest extends TestCase
         self::assertSame(OperationType::Expense->value, $params['r_what']);
         self::assertSame(1, $params['r_is_category']);
         self::assertSame(['10', '20'], $params['r_category']);
+    }
+
+    public function testRejectsCategoryFilterForAllOperationTypesBeforeSoapCall(): void
+    {
+        $query = RecordQuery::forDateRange(
+            new \DateTimeImmutable('2026-01-01'),
+            new \DateTimeImmutable('2026-01-31'),
+        )->onlyCategories(['10']);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('OperationType::Expense or OperationType::Income');
+
+        $query->toSoapParams();
     }
 
     public function testCanRequestBalanceAfterWithoutSendingWebOnlySoapParameter(): void

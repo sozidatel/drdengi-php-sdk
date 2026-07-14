@@ -55,4 +55,18 @@ final class PlaceServiceTest extends TestCase
         self::assertSame(['11'], array_map(static fn ($place): string => $place->id, $service->accounts()));
         self::assertSame(['10'], array_map(static fn ($place): string => $place->id, $service->folders()));
     }
+
+    public function testUpdateForcesServerIdFromMethodArgument(): void
+    {
+        $transport = new FakeTransport(['setPlaceList' => [['server_id' => '10']]]);
+        $service = new PlaceService($transport);
+
+        $service->update('10', [
+            'server_id' => '20',
+            'name' => 'Cash',
+        ]);
+
+        self::assertSame('10', $transport->calls[0]['arguments'][0][0]['server_id']);
+        self::assertSame('Cash', $transport->calls[0]['arguments'][0][0]['name']);
+    }
 }

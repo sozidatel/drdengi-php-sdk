@@ -76,7 +76,7 @@ final readonly class PlaceService
      */
     public function update(string|int $serverId, array $fields): array
     {
-        $payload = $fields + ['server_id' => (string)$serverId];
+        $payload = array_replace($fields, ['server_id' => (string)$serverId]);
 
         return DrebedengiNormalizer::listOfArrays($this->transport->call('setPlaceList', [[$payload]]));
     }

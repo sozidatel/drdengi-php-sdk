@@ -7,6 +7,7 @@ namespace Soz\Drebedengi\Model;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 
 final readonly class Record implements \JsonSerializable
 {
@@ -42,9 +43,19 @@ final readonly class Record implements \JsonSerializable
     ): self
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
-        $operationType = OperationType::from((int)($raw['operation_type'] ?? OperationType::Expense->value));
+        $id = self::requiredString($raw, ['id', 'server_id'], 'record ID');
+        $placeId = self::requiredString($raw, ['place_id', 'budget_account_id'], 'record place ID');
+        $budgetObjectId = self::requiredString($raw, ['budget_object_id'], 'record budget object ID');
+        $currencyId = self::requiredString($raw, ['currency_id'], 'record currency ID');
+        $operationDate = self::requiredString($raw, ['operation_date'], 'record operation date');
+        $sum = self::requiredInteger($raw, ['sum', 'difference'], 'record sum');
+        $operationTypeValue = self::requiredInteger($raw, ['operation_type'], 'record operation type');
+        $operationType = OperationType::tryFrom($operationTypeValue)
+            ?? throw new UnexpectedResponseException(sprintf(
+                'Drebedengi record response contains unknown operation type %d.',
+                $operationTypeValue,
+            ));
         $linkedRecordId = DrebedengiNormalizer::nullableId($raw['id2'] ?? null);
-        $currencyId = DrebedengiNormalizer::string($raw['currency_id'] ?? '');
 
         if ($currency !== null && $currency->id !== $currencyId) {
             throw new InvalidArgumentException(sprintf(
@@ -54,14 +65,12 @@ final readonly class Record implements \JsonSerializable
             ));
         }
 
-        $minorUnits = (int)($raw['sum'] ?? $raw['difference'] ?? 0);
-
         return new self(
-            id: DrebedengiNormalizer::string($raw['id'] ?? $raw['server_id'] ?? ''),
-            placeId: DrebedengiNormalizer::string($raw['place_id'] ?? $raw['budget_account_id'] ?? ''),
-            budgetObjectId: DrebedengiNormalizer::string($raw['budget_object_id'] ?? ''),
-            sum: $currency?->amountFromMinorUnits($minorUnits) ?? MoneyAmount::fromMinorUnits($minorUnits),
-            operationDate: DrebedengiDateTime::parseDateTime((string)($raw['operation_date'] ?? 'now'), $timezone),
+            id: $id,
+            placeId: $placeId,
+            budgetObjectId: $budgetObjectId,
+            sum: $currency?->amountFromMinorUnits($sum) ?? MoneyAmount::fromMinorUnits($sum),
+            operationDate: DrebedengiDateTime::parseDateTime($operationDate, $timezone),
             comment: (string)($raw['comment'] ?? ''),
             currencyId: $currencyId,
             duty: DrebedengiNormalizer::bool($raw['is_duty'] ?? false),
@@ -76,6 +85,47 @@ final readonly class Record implements \JsonSerializable
             userId: DrebedengiNormalizer::nullableId($raw['user_nuid'] ?? null),
             raw: $raw,
         );
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @param non-empty-list<string> $fields
+     */
+    private static function requiredString(array $raw, array $fields, string $label): string
+    {
+        foreach ($fields as $field) {
+            if (!array_key_exists($field, $raw) || !is_scalar($raw[$field])) {
+                continue;
+            }
+
+            $value = trim((string)$raw[$field]);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        throw new UnexpectedResponseException(sprintf(
+            'Drebedengi record response is missing %s (%s).',
+            $label,
+            implode(' or ', $fields),
+        ));
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @param non-empty-list<string> $fields
+     */
+    private static function requiredInteger(array $raw, array $fields, string $label): int
+    {
+        $value = self::requiredString($raw, $fields, $label);
+        if (!preg_match('/^-?\d+$/', $value)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Drebedengi record response contains non-integer %s.',
+                $label,
+            ));
+        }
+
+        return (int)$value;
     }
 
     /**
