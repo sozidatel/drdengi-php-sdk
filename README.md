@@ -250,6 +250,7 @@ $amount = $btc->amount('0.00001234');
 `$client->currencies()->refresh()`.
 
 `createTransfer()` и `createExchange()` сами создают парные записи и связывают их через `client_move_id` / `client_change_id`.
+Перевод на тот же самый счёт SDK отклоняет до SOAP-вызова.
 
 ## Обновление и удаление
 
@@ -261,6 +262,7 @@ $client->records()->delete('RECORD_ID', $record->operationType);
 ```
 
 DTO сохраняют исходный SOAP-массив в поле `raw`, чтобы можно было разбирать неизвестные legacy-поля без потери данных.
+Методы `delete()` принимают только положительные целочисленные server ID и проверяют их до SOAP-вызова.
 
 ## Синхронизация по revision
 

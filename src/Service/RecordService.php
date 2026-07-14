@@ -7,6 +7,7 @@ namespace Soz\Drebedengi\Service;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\UnexpectedResponseException;
+use Soz\Drebedengi\Model\BalanceItem;
 use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
@@ -162,6 +163,12 @@ final readonly class RecordService
         \DateTimeInterface $date,
         string $comment = '',
     ): array {
+        $fromPlaceId = DrebedengiNormalizer::positiveIntegerId($fromPlaceId, 'Transfer source place ID');
+        $toPlaceId = DrebedengiNormalizer::positiveIntegerId($toPlaceId, 'Transfer destination place ID');
+        if ($fromPlaceId === $toPlaceId) {
+            throw new InvalidArgumentException('Transfer source and destination place IDs must be different.');
+        }
+
         $this->assertAmountMatchesCurrency($amount, $currencyId);
 
         $fromClientId = $this->clientId();
@@ -267,6 +274,7 @@ final readonly class RecordService
 
     public function delete(string|int $id, OperationType $type): bool
     {
+        $id = DrebedengiNormalizer::positiveIntegerId($id, 'Record ID');
         $deleteType = match ($type) {
             OperationType::Income => DeleteObjectType::Income,
             OperationType::Expense => DeleteObjectType::Expense,
@@ -327,15 +335,26 @@ final readonly class RecordService
             'is_with_accum' => false,
             'is_with_duty' => false,
         ]])) as $balance) {
-            $balances[$this->balanceKey($balance)] = (int)($balance['sum'] ?? 0);
+            $item = BalanceItem::fromSoap($balance);
+            $this->currencyFromResponse($item->currencyId, 'Balance');
+            $balances[$item->placeId . ':' . $item->currencyId] = $item->sum->minorUnits;
         }
 
         $balanceAfterById = [];
         // Drebedengi returns records newest first, so unwind them from the end-of-day balance.
         foreach ($allRows as $row) {
-            $key = $this->balanceKey($row);
-            $balanceAfterById[DrebedengiNormalizer::string($row['id'] ?? $row['server_id'] ?? '')] = $balances[$key] ?? 0;
-            $balances[$key] = ($balances[$key] ?? 0) - $this->rowMinorUnits($row);
+            $record = $this->recordFromSoap($row);
+            $key = $record->placeId . ':' . $record->currencyId;
+            if (!array_key_exists($key, $balances)) {
+                throw new UnexpectedResponseException(sprintf(
+                    'Balance response does not contain place ID "%s" in currency ID "%s".',
+                    $record->placeId,
+                    $record->currencyId,
+                ));
+            }
+
+            $balanceAfterById[$record->id] = $balances[$key];
+            $balances[$key] -= $record->sum->minorUnits;
         }
 
         return array_map(
@@ -378,24 +397,6 @@ final readonly class RecordService
             && (int)$params['r_is_place'] === 0
             && (int)$params['r_is_tag'] === 0
             && (int)$params['r_is_category'] === 0;
-    }
-
-    /**
-     * @param array<string, mixed> $row
-     */
-    private function balanceKey(array $row): string
-    {
-        return DrebedengiNormalizer::string($row['place_id'] ?? $row['budget_account_id'] ?? '')
-            . ':'
-            . DrebedengiNormalizer::string($row['currency_id'] ?? '');
-    }
-
-    /**
-     * @param array<string, mixed> $row
-     */
-    private function rowMinorUnits(array $row): int
-    {
-        return (int)($row['sum'] ?? $row['difference'] ?? 0);
     }
 
     /**
@@ -451,7 +452,7 @@ final readonly class RecordService
     /** @param array<string, mixed> $raw */
     private function recordFromSoap(array $raw): Record
     {
-        $currencyId = DrebedengiNormalizer::string($raw['currency_id'] ?? '');
+        $currencyId = DrebedengiNormalizer::requiredString($raw, 'currency_id', 'record');
 
         return Record::fromSoap(
             $raw,
@@ -460,11 +461,12 @@ final readonly class RecordService
         );
     }
 
-    private function currencyFromResponse(string $currencyId): Currency
+    private function currencyFromResponse(string $currencyId, string $context = 'Record'): Currency
     {
         return $this->currencies->find($currencyId)
             ?? throw new UnexpectedResponseException(sprintf(
-                'Record response refers to unknown currency ID "%s".',
+                '%s response refers to unknown currency ID "%s".',
+                $context,
                 $currencyId,
             ));
     }

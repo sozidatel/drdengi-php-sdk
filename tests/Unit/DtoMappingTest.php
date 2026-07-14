@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\BalanceItem;
+use Soz\Drebedengi\Model\Category;
+use Soz\Drebedengi\Model\Change;
 use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\Place;
 use Soz\Drebedengi\Model\PlaceType;
 use Soz\Drebedengi\Model\Record;
+use Soz\Drebedengi\Model\Source;
+use Soz\Drebedengi\Model\Tag;
 
 final class DtoMappingTest extends TestCase
 {
@@ -179,6 +184,103 @@ final class DtoMappingTest extends TestCase
         self::assertSame(8, $btc->decimalPlaces);
         self::assertSame(1_000_000, $btc->ratio);
         self::assertTrue($btc->investing);
+    }
+
+    public function testRejectsCurrencyWithoutRatio(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('required field "ratio"');
+
+        Currency::fromSoap(['id' => '1', 'name' => 'Euro']);
+    }
+
+    public function testRejectsUnsupportedCurrencyRatio(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('invalid ratio 3');
+
+        Currency::fromSoap(['id' => '1', 'name' => 'Euro', 'ratio' => '3']);
+    }
+
+    public function testMapsValidChange(): void
+    {
+        $change = Change::fromSoap([
+            'revision' => '42',
+            'action_id' => '2',
+            'object_type_id' => '1',
+            'object_id' => '100',
+            'date' => '2026-07-14 12:00:00',
+        ]);
+
+        self::assertSame(42, $change->revision);
+        self::assertSame('100', $change->objectId);
+        self::assertSame('2026-07-14 12:00:00', $change->date?->format('Y-m-d H:i:s'));
+    }
+
+    public function testRejectsChangeWithoutRevision(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('required field "revision"');
+
+        Change::fromSoap([
+            'action_id' => '2',
+            'object_type_id' => '1',
+            'object_id' => '100',
+        ]);
+    }
+
+    public function testRejectsChangeWithInvalidDate(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('invalid field "date"');
+
+        Change::fromSoap([
+            'revision' => '42',
+            'action_id' => '2',
+            'object_type_id' => '1',
+            'object_id' => '100',
+            'date' => 'definitely not a date',
+        ]);
+    }
+
+    public function testRejectsChangeWithUnknownAction(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('unknown action ID 99');
+
+        Change::fromSoap([
+            'revision' => '42',
+            'action_id' => '99',
+            'object_type_id' => '1',
+            'object_id' => '100',
+        ]);
+    }
+
+    /**
+     * @param class-string $dtoClass
+     * @param array<string, mixed> $raw
+     */
+    #[DataProvider('incompleteReferenceDtoProvider')]
+    public function testRejectsIncompleteReferenceDto(string $dtoClass, array $raw, string $field): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage(sprintf('required field "%s"', $field));
+
+        $dtoClass::fromSoap($raw);
+    }
+
+    /** @return iterable<string, array{class-string, array<string, string>, string}> */
+    public static function incompleteReferenceDtoProvider(): iterable
+    {
+        foreach ([
+            'place' => Place::class,
+            'category' => Category::class,
+            'source' => Source::class,
+            'tag' => Tag::class,
+        ] as $label => $class) {
+            yield $label . ' without ID' => [$class, ['name' => 'Name'], 'id'];
+            yield $label . ' without name' => [$class, ['id' => '10'], 'name'];
+        }
     }
 
     public function testRejectsRecordWithoutRequiredFinancialFields(): void

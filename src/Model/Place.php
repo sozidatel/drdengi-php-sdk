@@ -38,8 +38,8 @@ final readonly class Place implements \JsonSerializable
     public static function fromSoap(array $raw): self
     {
         return new self(
-            id: DrebedengiNormalizer::string($raw['id'] ?? ''),
-            name: (string)($raw['name'] ?? ''),
+            id: DrebedengiNormalizer::requiredString($raw, 'id', 'place'),
+            name: DrebedengiNormalizer::requiredString($raw, 'name', 'place'),
             type: PlaceType::fromSoap($raw['type'] ?? null),
             parentId: self::normalParentId($raw['parent_id'] ?? null),
             systemParentId: self::systemParentId($raw['parent_id'] ?? null),

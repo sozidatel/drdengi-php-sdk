@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Service\PlaceService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -68,5 +69,20 @@ final class PlaceServiceTest extends TestCase
 
         self::assertSame('10', $transport->calls[0]['arguments'][0][0]['server_id']);
         self::assertSame('Cash', $transport->calls[0]['arguments'][0][0]['name']);
+    }
+
+    public function testDeleteRejectsInvalidPlaceIdBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = new PlaceService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Place ID');
+
+        try {
+            $service->delete('not-an-id');
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
     }
 }

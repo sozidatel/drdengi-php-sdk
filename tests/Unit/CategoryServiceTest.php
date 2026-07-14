@@ -177,4 +177,19 @@ final class CategoryServiceTest extends TestCase
         self::assertSame('deleteObject', $transport->calls[0]['method']);
         self::assertSame([10, 'object'], $transport->calls[0]['arguments']);
     }
+
+    public function testDeleteRejectsInvalidCategoryIdBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = new CategoryService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Category ID');
+
+        try {
+            $service->delete('not-an-id');
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
 }

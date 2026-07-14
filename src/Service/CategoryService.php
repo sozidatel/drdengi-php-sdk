@@ -114,7 +114,9 @@ final readonly class CategoryService
 
     public function delete(string|int $id): bool
     {
-        return (int)$this->transport->call('deleteObject', [(int)$id, DeleteObjectType::Object->value]) === 1;
+        $id = DrebedengiNormalizer::positiveIntegerId($id, 'Category ID');
+
+        return (int)$this->transport->call('deleteObject', [$id, DeleteObjectType::Object->value]) === 1;
     }
 
     /**

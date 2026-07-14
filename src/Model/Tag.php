@@ -29,8 +29,8 @@ final readonly class Tag implements \JsonSerializable
     public static function fromSoap(array $raw): self
     {
         return new self(
-            id: DrebedengiNormalizer::string($raw['id'] ?? ''),
-            name: (string)($raw['name'] ?? ''),
+            id: DrebedengiNormalizer::requiredString($raw, 'id', 'tag'),
+            name: DrebedengiNormalizer::requiredString($raw, 'name', 'tag'),
             parentId: DrebedengiNormalizer::nullableId($raw['parent_id'] ?? null),
             familyId: DrebedengiNormalizer::nullableId($raw['family_id'] ?? null),
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),

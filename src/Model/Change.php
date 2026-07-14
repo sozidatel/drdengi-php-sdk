@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Model;
 
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
 
@@ -29,19 +30,42 @@ final readonly class Change implements \JsonSerializable
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
         $date = null;
-        if (!empty($raw['date'])) {
+        if (array_key_exists('date', $raw) && $raw['date'] !== null && $raw['date'] !== '') {
+            $dateValue = DrebedengiNormalizer::requiredString($raw, 'date', 'change');
             try {
-                $date = DrebedengiDateTime::parseDateTime((string)$raw['date'], $timezone);
-            } catch (\Exception) {
-                $date = null;
+                $date = DrebedengiDateTime::parseDateTime($dateValue, $timezone);
+            } catch (\Throwable $exception) {
+                throw new UnexpectedResponseException(
+                    'Drebedengi change response contains invalid field "date".',
+                    0,
+                    $exception,
+                );
             }
         }
 
+        $revision = DrebedengiNormalizer::requiredInteger($raw, 'revision', 'change');
+        if ($revision < 0) {
+            throw new UnexpectedResponseException('Drebedengi change response contains a negative revision.');
+        }
+
+        $actionValue = DrebedengiNormalizer::requiredInteger($raw, 'action_id', 'change');
+        $action = ChangeAction::tryFrom($actionValue)
+            ?? throw new UnexpectedResponseException(sprintf(
+                'Drebedengi change response contains unknown action ID %d.',
+                $actionValue,
+            ));
+        $objectTypeValue = DrebedengiNormalizer::requiredInteger($raw, 'object_type_id', 'change');
+        $objectType = ChangedObjectType::tryFrom($objectTypeValue)
+            ?? throw new UnexpectedResponseException(sprintf(
+                'Drebedengi change response contains unknown object type ID %d.',
+                $objectTypeValue,
+            ));
+
         return new self(
-            revision: (int)($raw['revision'] ?? 0),
-            action: ChangeAction::from((int)($raw['action_id'] ?? 0)),
-            objectType: ChangedObjectType::from((int)($raw['object_type_id'] ?? 0)),
-            objectId: DrebedengiNormalizer::string($raw['object_id'] ?? ''),
+            revision: $revision,
+            action: $action,
+            objectType: $objectType,
+            objectId: DrebedengiNormalizer::requiredString($raw, 'object_id', 'change'),
             date: $date,
             raw: $raw,
         );

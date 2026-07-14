@@ -28,8 +28,8 @@ final readonly class Source implements \JsonSerializable
     public static function fromSoap(array $raw): self
     {
         return new self(
-            id: DrebedengiNormalizer::string($raw['id'] ?? ''),
-            name: (string)($raw['name'] ?? ''),
+            id: DrebedengiNormalizer::requiredString($raw, 'id', 'source'),
+            name: DrebedengiNormalizer::requiredString($raw, 'name', 'source'),
             parentId: DrebedengiNormalizer::nullableId($raw['parent_id'] ?? null),
             familyId: DrebedengiNormalizer::nullableId($raw['budget_family_id'] ?? $raw['family_id'] ?? null),
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),

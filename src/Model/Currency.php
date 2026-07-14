@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Model;
 
+use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 
 final readonly class Currency implements \JsonSerializable
@@ -32,11 +34,21 @@ final readonly class Currency implements \JsonSerializable
      */
     public static function fromSoap(array $raw): self
     {
-        $ratio = max(1, (int)($raw['ratio'] ?? 1));
+        $ratio = DrebedengiNormalizer::requiredInteger($raw, 'ratio', 'currency');
+
+        try {
+            $decimalPlaces = self::decimalPlacesFromRatio($ratio);
+        } catch (InvalidArgumentException $exception) {
+            throw new UnexpectedResponseException(
+                sprintf('Drebedengi currency response contains invalid ratio %d.', $ratio),
+                0,
+                $exception,
+            );
+        }
 
         return new self(
-            id: DrebedengiNormalizer::string($raw['id'] ?? ''),
-            name: (string)($raw['name'] ?? ''),
+            id: DrebedengiNormalizer::requiredString($raw, 'id', 'currency'),
+            name: DrebedengiNormalizer::requiredString($raw, 'name', 'currency'),
             code: DrebedengiNormalizer::nullableId($raw['code'] ?? null),
             course: array_key_exists('course', $raw) ? (string)$raw['course'] : null,
             familyId: DrebedengiNormalizer::nullableId($raw['family_id'] ?? null),
@@ -45,7 +57,7 @@ final readonly class Currency implements \JsonSerializable
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),
             investing: DrebedengiNormalizer::bool($raw['is_investing'] ?? false),
             ratio: $ratio,
-            decimalPlaces: self::decimalPlacesFromRatio($ratio),
+            decimalPlaces: $decimalPlaces,
             raw: $raw,
         );
     }
@@ -57,11 +69,18 @@ final readonly class Currency implements \JsonSerializable
      */
     public static function decimalPlacesFromRatio(int $ratio): int
     {
-        $ratio = max(1, $ratio);
+        if ($ratio < 1) {
+            throw new InvalidArgumentException('Currency ratio must be a positive power of ten.');
+        }
+
         $extraPlaces = 0;
         while ($ratio > 1 && $ratio % 10 === 0) {
             $extraPlaces++;
             $ratio = intdiv($ratio, 10);
+        }
+
+        if ($ratio !== 1 || $extraPlaces > 16) {
+            throw new InvalidArgumentException('Currency ratio must be a supported power of ten.');
         }
 
         return 2 + $extraPlaces;

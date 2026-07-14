@@ -7,6 +7,7 @@ namespace Soz\Drebedengi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
@@ -68,6 +69,42 @@ final class RecordServiceTest extends TestCase
         self::assertSame($payloads[1]['client_id'], $payloads[0]['client_move_id']);
         self::assertSame(4, $payloads[0]['operation_type']);
         self::assertSame(4, $payloads[1]['operation_type']);
+    }
+
+    public function testCreateTransferRejectsSamePlaceBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('must be different');
+
+        try {
+            $service->createTransfer(
+                fromPlaceId: '1',
+                toPlaceId: 1,
+                amount: MoneyAmount::fromDecimalString('5.00'),
+                currencyId: '3',
+                date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+            );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testDeleteRejectsInvalidRecordIdBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Record ID');
+
+        try {
+            $service->delete('not-an-id', OperationType::Expense);
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
     }
 
     public function testCreateExchangeRejectsSameCurrency(): void
@@ -331,6 +368,108 @@ final class RecordServiceTest extends TestCase
         self::assertSame(500, $records[0]->balanceAfter?->minorUnits);
         self::assertSame(['getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
         self::assertTrue($transport->calls[0]['arguments'][0]['is_report']);
+    }
+
+    public function testBalanceAfterRejectsBalanceWithoutSum(): void
+    {
+        $row = [
+            'id' => '1',
+            'place_id' => '1',
+            'budget_object_id' => '10',
+            'sum' => '500',
+            'operation_date' => '2026-01-01 09:00:00',
+            'currency_id' => '3',
+            'operation_type' => '2',
+        ];
+        $transport = new FakeTransport([
+            'getRecordList' => [$row],
+            'getBalance' => [[
+                'place_id' => '1',
+                'currency_id' => '3',
+            ]],
+        ]);
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('required field "sum"');
+
+        $this->service($transport)->list(
+            RecordQuery::forDateRange(
+                new \DateTimeImmutable('2026-01-01'),
+                new \DateTimeImmutable('2026-01-01'),
+            )->withBalanceAfter(),
+        );
+    }
+
+    public function testBalanceAfterRejectsMissingAccountCurrencyBalance(): void
+    {
+        $row = [
+            'id' => '1',
+            'place_id' => '1',
+            'budget_object_id' => '10',
+            'sum' => '500',
+            'operation_date' => '2026-01-01 09:00:00',
+            'currency_id' => '3',
+            'operation_type' => '2',
+        ];
+        $transport = new FakeTransport([
+            'getRecordList' => [$row],
+            'getBalance' => [[
+                'place_id' => '2',
+                'currency_id' => '3',
+                'sum' => '500',
+            ]],
+        ]);
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('does not contain place ID "1"');
+
+        $this->service($transport)->list(
+            RecordQuery::forDateRange(
+                new \DateTimeImmutable('2026-01-01'),
+                new \DateTimeImmutable('2026-01-01'),
+            )->withBalanceAfter(),
+        );
+    }
+
+    public function testBalanceAfterRejectsMalformedSupplementalRecord(): void
+    {
+        $targetRow = [
+            'id' => '2',
+            'place_id' => '1',
+            'budget_object_id' => '20',
+            'sum' => '-200',
+            'operation_date' => '2026-01-02 10:00:00',
+            'currency_id' => '3',
+            'operation_type' => '3',
+        ];
+        $malformedRow = [
+            'id' => '3',
+            'place_id' => '1',
+            'budget_object_id' => '30',
+            'operation_date' => '2026-01-02 12:00:00',
+            'currency_id' => '3',
+            'operation_type' => '2',
+        ];
+        $transport = new FakeTransport([
+            'getRecordList' => ['__sequence' => [[$targetRow], [$malformedRow, $targetRow]]],
+            'getBalance' => [[
+                'place_id' => '1',
+                'currency_id' => '3',
+                'sum' => '400',
+            ]],
+        ]);
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('record sum');
+
+        $this->service($transport)->list(
+            RecordQuery::forDateRange(
+                new \DateTimeImmutable('2026-01-01'),
+                new \DateTimeImmutable('2026-01-02'),
+            )
+                ->operationType(OperationType::Expense)
+                ->withBalanceAfter(),
+        );
     }
 
     public function testRejectsBalanceAfterForConvertedCurrencyBeforeCallingSoap(): void
