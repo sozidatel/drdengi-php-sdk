@@ -43,6 +43,9 @@ final readonly class RecordService
         if ($query->shouldIncludeBalanceAfter() && (string)$params['r_currency'] !== '0') {
             throw new InvalidArgumentException('Balance after a record is only available in the original currency.');
         }
+        if ($query->shouldIncludeBalanceAfter() && $query->shouldIncludePlanned()) {
+            throw new InvalidArgumentException('Balance after a record cannot be combined with planned records.');
+        }
 
         $rows = DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getRecordList', [$params, []]),
@@ -266,6 +269,9 @@ final readonly class RecordService
         if ($record->id === '') {
             throw new InvalidArgumentException('Cannot update a Drebedengi record without server id.');
         }
+        if ($record->planned) {
+            throw new InvalidArgumentException('Cannot update a planned record through RecordService::update().');
+        }
 
         $this->assertAmountMatchesCurrency($record->sum, $record->currencyId);
 
@@ -323,6 +329,7 @@ final readonly class RecordService
                 'period_to' => $to,
                 'r_how' => 1,
                 'r_what' => OperationType::All->value,
+                'r_who' => 0,
                 'r_currency' => 0,
                 'r_is_place' => 0,
                 'r_is_tag' => 0,
@@ -393,6 +400,7 @@ final readonly class RecordService
     {
         return (int)$params['r_period'] === 0
             && (int)$params['r_what'] === OperationType::All->value
+            && (int)$params['r_who'] === 0
             && (string)$params['r_currency'] === '0'
             && (int)$params['r_is_place'] === 0
             && (int)$params['r_is_tag'] === 0

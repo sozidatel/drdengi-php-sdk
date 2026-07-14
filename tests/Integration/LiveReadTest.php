@@ -60,5 +60,8 @@ final class LiveReadTest extends TestCase
             self::assertSame($record->currencyId, $record->balanceAfter->currencyId);
             self::assertSame($currenciesById[$record->currencyId]->decimalPlaces, $record->balanceAfter->scale);
         }
+        self::assertIsArray($client->records()->list(
+            (new RecordQuery())->today()->includePlanned()->includeDebts(),
+        ));
     }
 }

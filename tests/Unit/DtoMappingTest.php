@@ -124,6 +124,29 @@ final class DtoMappingTest extends TestCase
         self::assertSame('2026-06-14 12:00:00', $record->operationDate->format('Y-m-d H:i:s'));
     }
 
+    public function testMapsPlannedRecordMetadata(): void
+    {
+        $record = Record::fromSoap([
+            'id' => '2248_598',
+            'budget_account_id' => '40032',
+            'budget_object_id' => '40029',
+            'difference' => '-120000',
+            'operation_date' => '2037-12-29 13:59:00',
+            'currency_id' => '17',
+            'operation_type' => 3,
+            'is_planned' => 't',
+            'repeat_id' => 598,
+            'period_id' => '-2',
+            'init_date' => '2026-07-10 13:59:00',
+        ], new \DateTimeZone('Europe/Moscow'));
+
+        self::assertTrue($record->planned);
+        self::assertSame('598', $record->plannedRepeatId);
+        self::assertSame('-2', $record->plannedPeriodId);
+        self::assertSame('2026-07-10 13:59:00', $record->plannedInitialDate?->format('Y-m-d H:i:s'));
+        self::assertSame('Europe/Moscow', $record->plannedInitialDate?->getTimezone()->getName());
+    }
+
     public function testMapsDetailReportTransferFieldsWithoutChangingRawPayload(): void
     {
         $raw = [

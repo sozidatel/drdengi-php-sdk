@@ -181,6 +181,31 @@ foreach ($records as $record) {
 }
 ```
 
+Периоды и остальные фильтры detail-журнала:
+
+```php
+$records = $client->records()->list(
+    (new RecordQuery())
+        ->thisMonth() // также today(), lastMonth(), thisQuarter(), thisYear(), lastYear(), allTime(), last20()
+        ->relativeTo(new DateTimeImmutable('2026-07-14'))
+        ->operationType(OperationType::Expense)
+        ->includePlanned()
+        ->includeDebts(false)
+        ->forUser('USER_ID')
+        ->exceptPlaces(['PLACE_ID'])
+        ->onlyTags(['TAG_ID'])
+        ->exceptCategories(['CATEGORY_ID']),
+);
+```
+
+`relativeTo()` задаёт опорную дату для именованного периода и форматируется в timezone аккаунта.
+`forAllUsers()` возвращает query к семейной выборке. Для счетов, тегов и категорий доступны
+`only...()`, `except...()` и возврат к полной выборке через `all...()`.
+
+При `includePlanned()` в `Record` заполняются `planned`, `plannedRepeatId`, `plannedPeriodId`
+и `plannedInitialDate`. Плановые операции нельзя сочетать с `withBalanceAfter()`: SOAP не отдаёт
+готовый прогнозный остаток, а вычислять его из фактического остатка было бы неоднозначно.
+
 Фильтры по категориям и тегам допустимы только для расходов или доходов, поэтому
 перед ними нужно явно выбрать `OperationType::Expense` или `OperationType::Income`.
 Несовместимое сочетание SDK отклоняет до SOAP-вызова.

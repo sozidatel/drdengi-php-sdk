@@ -30,6 +30,10 @@ final readonly class Record implements \JsonSerializable
         public ?string $userId,
         public array $raw,
         public ?MoneyAmount $balanceAfter = null,
+        public bool $planned = false,
+        public ?string $plannedRepeatId = null,
+        public ?string $plannedPeriodId = null,
+        public ?\DateTimeImmutable $plannedInitialDate = null,
     ) {
     }
 
@@ -84,7 +88,20 @@ final readonly class Record implements \JsonSerializable
             groupId: DrebedengiNormalizer::nullableId($raw['group_id'] ?? null),
             userId: DrebedengiNormalizer::nullableId($raw['user_nuid'] ?? null),
             raw: $raw,
+            planned: DrebedengiNormalizer::bool($raw['is_planned'] ?? false),
+            plannedRepeatId: DrebedengiNormalizer::nullableId($raw['repeat_id'] ?? null),
+            plannedPeriodId: DrebedengiNormalizer::nullableId($raw['period_id'] ?? null),
+            plannedInitialDate: self::optionalDateTime($raw['init_date'] ?? null, $timezone),
         );
+    }
+
+    private static function optionalDateTime(mixed $value, \DateTimeZone $timezone): ?\DateTimeImmutable
+    {
+        if (!is_scalar($value) || trim((string)$value) === '') {
+            return null;
+        }
+
+        return DrebedengiDateTime::parseDateTime(trim((string)$value), $timezone);
     }
 
     /**
@@ -179,6 +196,10 @@ final readonly class Record implements \JsonSerializable
             userId: $this->userId,
             raw: $this->raw,
             balanceAfter: $balanceAfter,
+            planned: $this->planned,
+            plannedRepeatId: $this->plannedRepeatId,
+            plannedPeriodId: $this->plannedPeriodId,
+            plannedInitialDate: $this->plannedInitialDate,
         );
     }
 

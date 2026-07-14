@@ -12,6 +12,7 @@ use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
+use Soz\Drebedengi\Model\Record;
 use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Service\RecordService;
 use Soz\Drebedengi\Support\CurrencyCatalog;
@@ -487,6 +488,47 @@ final class RecordServiceTest extends TestCase
                     new \DateTimeImmutable('2026-01-02'),
                 )->convertedToCurrency('3')->withBalanceAfter(),
             );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testRejectsBalanceAfterForPlannedRecordsBeforeCallingSoap(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('cannot be combined with planned records');
+
+        try {
+            $service->list(
+                (new RecordQuery())->allTime()->includePlanned()->withBalanceAfter(),
+            );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testRejectsUpdatingSyntheticPlannedRecordBeforeCallingSoap(): void
+    {
+        $transport = new FakeTransport();
+        $record = Record::fromSoap([
+            'id' => '2248_598',
+            'budget_account_id' => '1',
+            'budget_object_id' => '2',
+            'difference' => '-120000',
+            'operation_date' => '2037-12-29 13:59:00',
+            'currency_id' => '3',
+            'operation_type' => 3,
+            'is_planned' => 't',
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Cannot update a planned record');
+
+        try {
+            $this->service($transport)->update($record);
         } finally {
             self::assertSame([], $transport->calls);
         }
