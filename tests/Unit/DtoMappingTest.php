@@ -118,6 +118,47 @@ final class DtoMappingTest extends TestCase
         self::assertSame('2026-06-14 12:00:00', $record->operationDate->format('Y-m-d H:i:s'));
     }
 
+    public function testMapsDetailReportTransferFieldsWithoutChangingRawPayload(): void
+    {
+        $raw = [
+            'id' => '20',
+            'budget_account_id' => '1',
+            'budget_object_id' => '2',
+            'difference' => '-1234',
+            'operation_date' => '2026-06-14 12:00:00',
+            'comment' => 'Transfer',
+            'currency_id' => '3',
+            'is_duty' => 'f',
+            'operation_type' => '4',
+            'id2' => '21',
+        ];
+
+        $record = Record::fromSoap($raw);
+
+        self::assertSame('1', $record->placeId);
+        self::assertSame(-1234, $record->sum->minorUnits);
+        self::assertSame('21', $record->serverMoveId);
+        self::assertNull($record->serverChangeId);
+        self::assertSame($raw, $record->raw);
+    }
+
+    public function testMapsDetailReportExchangeLink(): void
+    {
+        $record = Record::fromSoap([
+            'id' => '20',
+            'budget_account_id' => '1',
+            'budget_object_id' => '1',
+            'difference' => '-1234',
+            'operation_date' => '2026-06-14 12:00:00',
+            'currency_id' => '3',
+            'operation_type' => '5',
+            'id2' => '22',
+        ]);
+
+        self::assertNull($record->serverMoveId);
+        self::assertSame('22', $record->serverChangeId);
+    }
+
     public function testMapsCurrencyRatioToDecimalPlaces(): void
     {
         $fiat = Currency::fromSoap([

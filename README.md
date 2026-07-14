@@ -144,12 +144,14 @@ $expireDate = $client->account()->expireDate();
 
 ```php
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Model\OperationType;
 
 $records = $client->records()->list(
     RecordQuery::forDateRange(
         new DateTimeImmutable('2026-01-01'),
         new DateTimeImmutable('2026-01-31'),
     )
+        ->operationType(OperationType::Expense)
         ->onlyPlaces(['11416426'])
         ->onlyCategories(['CATEGORY_ID'])
         ->withBalanceAfter()
@@ -161,6 +163,10 @@ foreach ($records as $record) {
 ```
 
 По умолчанию `RecordQuery` использует `r_currency=0`, то есть оригинальную валюту операции.
+Обычное чтение использует безопасный detail report (`is_report=true`, `r_how=1`). В legacy SOAP
+режиме `is_report=false` сервер считает запрос первоначальной синхронизацией и сбрасывает
+служебные соответствия `client_id` / `server_id`, поэтому SDK не использует его для журнала.
+
 `withBalanceAfter()` добавляет в каждый `Record` поле `balanceAfter` с остатком на счёте сразу
 после операции. Расчёт доступен только для оригинальной валюты и может выполнить дополнительный
 `getRecordList`, если исходный запрос содержит фильтры, а также один `getBalance`.
@@ -246,6 +252,17 @@ $changes = $client->sync()->changesSince($lastSavedRevision);
 ```
 
 Потребитель SDK должен сохранять последнюю успешно обработанную revision сам. Для cron-синхронизаций важно сохранять progress инкрементально после каждой обработанной revision, а не только в конце пачки.
+
+Для настоящей первоначальной синхронизации можно получить полный набор записей в legacy
+sync/export-формате:
+
+```php
+$initialRecords = $client->sync()->initialRecords();
+```
+
+Этот вызов намеренно использует `is_report=false`. Сервер Дребеденег очищает при нём служебную
+таблицу дедупликации `client_id` / `server_id` для текущего API ID. Не используй
+`initialRecords()` для обычного чтения журнала или проверки результата записи.
 
 ## Прямой доступ к SOAP
 

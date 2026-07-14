@@ -22,7 +22,13 @@ final class LiveReadTest extends TestCase
         self::assertIsArray($client->currencies()->list());
         self::assertIsArray($client->tags()->list());
         self::assertIsArray($client->balance()->list());
-        self::assertIsArray($client->records()->list());
+        $records = $client->records()->list();
+        self::assertIsArray($records);
+        if ($records !== []) {
+            $recordsById = $client->records()->byIds([$records[0]->id]);
+            self::assertNotSame([], $recordsById);
+            self::assertSame($records[0]->id, $recordsById[0]->id);
+        }
 
         $recordsWithBalance = $client->records()->list(
             (new RecordQuery())->last20()->withBalanceAfter(),

@@ -37,19 +37,25 @@ final readonly class Record implements \JsonSerializable
     public static function fromSoap(array $raw, ?\DateTimeZone $timezone = null): self
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
+        $operationType = OperationType::from((int)($raw['operation_type'] ?? OperationType::Expense->value));
+        $linkedRecordId = DrebedengiNormalizer::nullableId($raw['id2'] ?? null);
 
         return new self(
             id: DrebedengiNormalizer::string($raw['id'] ?? $raw['server_id'] ?? ''),
-            placeId: DrebedengiNormalizer::string($raw['place_id'] ?? ''),
+            placeId: DrebedengiNormalizer::string($raw['place_id'] ?? $raw['budget_account_id'] ?? ''),
             budgetObjectId: DrebedengiNormalizer::string($raw['budget_object_id'] ?? ''),
-            sum: MoneyAmount::fromMinorUnits((int)($raw['sum'] ?? 0)),
+            sum: MoneyAmount::fromMinorUnits((int)($raw['sum'] ?? $raw['difference'] ?? 0)),
             operationDate: DrebedengiDateTime::parseDateTime((string)($raw['operation_date'] ?? 'now'), $timezone),
             comment: (string)($raw['comment'] ?? ''),
             currencyId: DrebedengiNormalizer::string($raw['currency_id'] ?? ''),
             duty: DrebedengiNormalizer::bool($raw['is_duty'] ?? false),
-            operationType: OperationType::from((int)($raw['operation_type'] ?? OperationType::Expense->value)),
-            serverMoveId: DrebedengiNormalizer::nullableId($raw['server_move_id'] ?? null),
-            serverChangeId: DrebedengiNormalizer::nullableId($raw['server_change_id'] ?? null),
+            operationType: $operationType,
+            serverMoveId: DrebedengiNormalizer::nullableId(
+                $raw['server_move_id'] ?? ($operationType === OperationType::Transfer ? $linkedRecordId : null),
+            ),
+            serverChangeId: DrebedengiNormalizer::nullableId(
+                $raw['server_change_id'] ?? ($operationType === OperationType::Exchange ? $linkedRecordId : null),
+            ),
             groupId: DrebedengiNormalizer::nullableId($raw['group_id'] ?? null),
             userId: DrebedengiNormalizer::nullableId($raw['user_nuid'] ?? null),
             raw: $raw,

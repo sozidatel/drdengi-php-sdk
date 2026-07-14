@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\RecordQuery;
 
 final class RecordQueryTest extends TestCase
@@ -16,7 +17,7 @@ final class RecordQueryTest extends TestCase
             new \DateTimeImmutable('2026-01-31'),
         )->onlyPlaces(['11416426'])->toSoapParams();
 
-        self::assertSame(false, $params['is_report']);
+        self::assertSame(true, $params['is_report']);
         self::assertSame(true, $params['is_show_duty']);
         self::assertSame(0, $params['r_period']);
         self::assertSame('2026-01-01', $params['period_from']);
@@ -32,8 +33,12 @@ final class RecordQueryTest extends TestCase
         $params = RecordQuery::forDateRange(
             new \DateTimeImmutable('2026-01-01'),
             new \DateTimeImmutable('2026-01-31'),
-        )->onlyCategories(['10', 20, '10'])->toSoapParams();
+        )
+            ->operationType(OperationType::Expense)
+            ->onlyCategories(['10', 20, '10'])
+            ->toSoapParams();
 
+        self::assertSame(OperationType::Expense->value, $params['r_what']);
         self::assertSame(1, $params['r_is_category']);
         self::assertSame(['10', '20'], $params['r_category']);
     }
@@ -47,5 +52,15 @@ final class RecordQueryTest extends TestCase
 
         self::assertTrue($query->shouldIncludeBalanceAfter());
         self::assertArrayNotHasKey('is_with_rest', $query->toSoapParams());
+    }
+
+    public function testCanRequestAllTimeLedgerReport(): void
+    {
+        $params = (new RecordQuery())->allTime()->toSoapParams();
+
+        self::assertTrue($params['is_report']);
+        self::assertSame(6, $params['r_period']);
+        self::assertArrayNotHasKey('period_from', $params);
+        self::assertArrayNotHasKey('period_to', $params);
     }
 }

@@ -9,7 +9,6 @@ use Soz\Drebedengi\Support\DrebedengiDateTime;
 
 final class RecordQuery
 {
-    private bool $isReport = false;
     private bool $showDuty = true;
     private int $period = 0;
     private ?\DateTimeInterface $from = null;
@@ -49,6 +48,15 @@ final class RecordQuery
     public function last20(): self
     {
         $this->period = 8;
+        $this->from = null;
+        $this->to = null;
+
+        return $this;
+    }
+
+    public function allTime(): self
+    {
+        $this->period = 6;
         $this->from = null;
         $this->to = null;
 
@@ -134,7 +142,9 @@ final class RecordQuery
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
 
         $params = [
-            'is_report' => $this->isReport,
+            // Detail report mode is a side-effect-free ledger read. The legacy
+            // is_report=false mode is reserved for SyncService::initialRecords().
+            'is_report' => true,
             'is_show_duty' => $this->showDuty,
             'r_period' => $this->period,
             'r_how' => $this->how,

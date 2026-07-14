@@ -59,7 +59,7 @@ final readonly class RecordService
     public function byIds(array $ids): array
     {
         return array_map(fn (array $item): Record => Record::fromSoap($item, $this->options->timezone), DrebedengiNormalizer::listOfArrays(
-            $this->transport->call('getRecordList', [[], $this->normalizeIds($ids)]),
+            $this->transport->call('getRecordList', [['is_report' => true], $this->normalizeIds($ids)]),
         ));
     }
 
@@ -293,7 +293,7 @@ final readonly class RecordService
         $allRows = $this->canReuseRowsForBalance($params)
             ? $queriedRows
             : DrebedengiNormalizer::listOfArrays($this->transport->call('getRecordList', [[
-                'is_report' => false,
+                'is_report' => true,
                 'is_show_duty' => true,
                 'r_period' => 0,
                 'period_from' => $from,
@@ -320,7 +320,7 @@ final readonly class RecordService
         foreach ($allRows as $row) {
             $key = $this->balanceKey($row);
             $balanceAfterById[DrebedengiNormalizer::string($row['id'] ?? $row['server_id'] ?? '')] = $balances[$key] ?? 0;
-            $balances[$key] = ($balances[$key] ?? 0) - (int)($row['sum'] ?? 0);
+            $balances[$key] = ($balances[$key] ?? 0) - $this->rowMinorUnits($row);
         }
 
         return array_map(
@@ -368,9 +368,17 @@ final readonly class RecordService
      */
     private function balanceKey(array $row): string
     {
-        return DrebedengiNormalizer::string($row['place_id'] ?? '')
+        return DrebedengiNormalizer::string($row['place_id'] ?? $row['budget_account_id'] ?? '')
             . ':'
             . DrebedengiNormalizer::string($row['currency_id'] ?? '');
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function rowMinorUnits(array $row): int
+    {
+        return (int)($row['sum'] ?? $row['difference'] ?? 0);
     }
 
     /**
