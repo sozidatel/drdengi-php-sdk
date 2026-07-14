@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use Soz\Drebedengi\Model\BalanceQuery;
 use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
@@ -32,6 +33,13 @@ final class LiveReadTest extends TestCase
             self::assertSame($balance->currencyId, $balance->sum->currencyId);
             self::assertSame($currenciesById[$balance->currencyId]->decimalPlaces, $balance->sum->scale);
         }
+        self::assertIsArray($client->balance()->list(
+            BalanceQuery::at(new \DateTimeImmutable('today'))
+                ->includeHidden()
+                ->includeZero()
+                ->subtractAccumulations()
+                ->subtractDebts(),
+        ));
         $records = $client->records()->list();
         self::assertIsArray($records);
         foreach ($records as $record) {

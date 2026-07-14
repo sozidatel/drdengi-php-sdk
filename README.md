@@ -76,6 +76,25 @@ $tags = $client->tags()->list();
 $balance = $client->balance()->list();
 ```
 
+Остатки на выбранную дату и дополнительные опции:
+
+```php
+use Soz\Drebedengi\Model\BalanceQuery;
+
+$balance = $client->balance()->list(
+    BalanceQuery::at(new DateTimeImmutable('2026-07-14'))
+        ->includeHidden()
+        ->includeZero()
+        ->subtractAccumulations()
+        ->subtractDebts(),
+);
+```
+
+`restDate` форматируется в timezone из `ClientOptions`. `subtractAccumulations()` вычитает
+зарезервированные накопления, `subtractDebts()` — долги, а `includeHidden()` и `includeZero()`
+добавляют скрытые и нулевые счета. Legacy-массив параметров для `balance()->list()` пока
+поддерживается для обратной совместимости.
+
 Места хранения:
 
 ```php

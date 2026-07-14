@@ -128,7 +128,7 @@ final class DrebedengiClient
 
     public function balance(): BalanceService
     {
-        return new BalanceService($this->transport, $this->currencyCatalog);
+        return new BalanceService($this->transport, $this->currencyCatalog, $this->options);
     }
 
     public function sync(): SyncService
