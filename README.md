@@ -219,6 +219,35 @@ $records = $client->records()->list(
 после операции. Расчёт доступен только для оригинальной валюты и может выполнить дополнительный
 `getRecordList`, если исходный запрос содержит фильтры, а также один `getBalance`.
 
+## Агрегированные отчёты
+
+`ReportService` отделён от журнала операций, потому что SOAP возвращает для агрегатов дерево
+категорий или источников, а не обычные `Record`:
+
+```php
+use Soz\Drebedengi\Model\ReportQuery;
+
+$query = ReportQuery::forDateRange(
+    new DateTimeImmutable('2026-01-01'),
+    new DateTimeImmutable('2026-01-31'),
+)
+    ->convertedToCurrency('CURRENCY_ID')
+    ->onlyPlaces(['PLACE_ID'])
+    ->averageDaily(); // также averageWeekly(), averageMonthly(), withoutAveraging()
+
+$expenses = $client->reports()->expensesByCategory($query);
+$income = $client->reports()->incomeBySource($query);
+
+foreach ($expenses as $row) {
+    echo $row->name . ': ' . $row->amount->toDecimalString();
+}
+```
+
+Без query отчёт строится за текущий месяц в оригинальных валютах и без усреднения. `ReportQuery`
+поддерживает те же периоды, пользователей, планы, долги и only/except-фильтры, что и
+`RecordQuery`. `ReportRow::amount` имеет тип `DecimalMoneyAmount`: при валютном пересчёте сервер
+может вернуть дробное количество minor units, и SDK сохраняет его без округления.
+
 ## Создание операций
 
 Суммы в SDK представлены как integer minor units, то есть в мельчайших единицах конкретной валюты. Для обычных валют это исторически 2 знака после запятой, а для криптовалют точность может быть выше.

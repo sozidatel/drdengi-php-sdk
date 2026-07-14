@@ -7,6 +7,7 @@ namespace Soz\Drebedengi\Tests\Integration;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Model\BalanceQuery;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Model\ReportQuery;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
 final class LiveReadTest extends TestCase
@@ -63,5 +64,17 @@ final class LiveReadTest extends TestCase
         self::assertIsArray($client->records()->list(
             (new RecordQuery())->today()->includePlanned()->includeDebts(),
         ));
+
+        $reportQuery = (new ReportQuery())
+            ->thisMonth()
+            ->convertedToCurrency($currencies[0]->id);
+        $expenseReport = $client->reports()->expensesByCategory($reportQuery);
+        $incomeReport = $client->reports()->incomeBySource($reportQuery);
+        self::assertIsArray($expenseReport);
+        self::assertIsArray($incomeReport);
+        foreach ([...$expenseReport, ...$incomeReport] as $row) {
+            self::assertSame($row->currencyId, $row->amount->currencyId);
+            self::assertSame($currenciesById[$row->currencyId]->decimalPlaces, $row->amount->scale);
+        }
     }
 }

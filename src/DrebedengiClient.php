@@ -12,6 +12,7 @@ use Soz\Drebedengi\Service\CurrencyService;
 use Soz\Drebedengi\Service\PlaceService;
 use Soz\Drebedengi\Service\RawService;
 use Soz\Drebedengi\Service\RecordService;
+use Soz\Drebedengi\Service\ReportService;
 use Soz\Drebedengi\Service\SourceService;
 use Soz\Drebedengi\Service\SyncService;
 use Soz\Drebedengi\Service\TagService;
@@ -94,6 +95,11 @@ final class DrebedengiClient
     public function records(): RecordService
     {
         return new RecordService($this->transport, $this->options, $this->currencyCatalog);
+    }
+
+    public function reports(): ReportService
+    {
+        return new ReportService($this->transport, $this->options, $this->currencyCatalog);
     }
 
     public function account(): AccountService
