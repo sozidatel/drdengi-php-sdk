@@ -67,6 +67,16 @@ final readonly class Currency implements \JsonSerializable
         return 2 + $extraPlaces;
     }
 
+    public function amount(string $decimal): MoneyAmount
+    {
+        return MoneyAmount::fromDecimalString($decimal, $this->decimalPlaces, $this->id);
+    }
+
+    public function amountFromMinorUnits(int $minorUnits): MoneyAmount
+    {
+        return MoneyAmount::fromMinorUnits($minorUnits, $this->decimalPlaces, $this->id);
+    }
+
     public function jsonSerialize(): array
     {
         return get_object_vars($this);

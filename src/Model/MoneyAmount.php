@@ -11,13 +11,18 @@ final readonly class MoneyAmount implements \JsonSerializable
     public function __construct(
         public int $minorUnits,
         public int $scale = 2,
+        public ?string $currencyId = null,
     ) {
         if ($scale < 0 || $scale > 18) {
             throw new InvalidArgumentException('Money scale must be between 0 and 18 decimal places.');
         }
+
+        if ($currencyId !== null && trim($currencyId) === '') {
+            throw new InvalidArgumentException('Currency ID must not be empty.');
+        }
     }
 
-    public static function fromDecimalString(string $amount, int $scale = 2): self
+    public static function fromDecimalString(string $amount, int $scale = 2, int|string|null $currencyId = null): self
     {
         $amount = trim($amount);
         if ($scale < 0 || $scale > 18) {
@@ -42,32 +47,40 @@ final readonly class MoneyAmount implements \JsonSerializable
         $multiplier = 10 ** $scale;
         $minor = $scale === 0 ? 0 : (int)str_pad($fraction, $scale, '0');
 
-        return new self($sign * (($major * $multiplier) + $minor), $scale);
+        return new self(
+            $sign * (($major * $multiplier) + $minor),
+            $scale,
+            $currencyId === null ? null : (string)$currencyId,
+        );
     }
 
-    public static function fromFloat(float $amount, int $scale = 2): self
+    public static function fromFloat(float $amount, int $scale = 2, int|string|null $currencyId = null): self
     {
-        return new self((int)round($amount * (10 ** $scale)), $scale);
+        return new self(
+            (int)round($amount * (10 ** $scale)),
+            $scale,
+            $currencyId === null ? null : (string)$currencyId,
+        );
     }
 
-    public static function fromMinorUnits(int $minorUnits, int $scale = 2): self
+    public static function fromMinorUnits(int $minorUnits, int $scale = 2, int|string|null $currencyId = null): self
     {
-        return new self($minorUnits, $scale);
+        return new self($minorUnits, $scale, $currencyId === null ? null : (string)$currencyId);
     }
 
     public function absolute(): self
     {
-        return new self(abs($this->minorUnits), $this->scale);
+        return new self(abs($this->minorUnits), $this->scale, $this->currencyId);
     }
 
     public function negate(): self
     {
-        return new self($this->minorUnits * -1, $this->scale);
+        return new self($this->minorUnits * -1, $this->scale, $this->currencyId);
     }
 
     public function withScale(int $scale): self
     {
-        return new self($this->minorUnits, $scale);
+        return new self($this->minorUnits, $scale, $this->currencyId);
     }
 
     public function toDecimalString(): string
@@ -89,14 +102,20 @@ final readonly class MoneyAmount implements \JsonSerializable
     }
 
     /**
-     * @return array{minorUnits: int, scale: int, decimal: string}
+     * @return array{minorUnits: int, scale: int, decimal: string, currencyId?: string}
      */
     public function jsonSerialize(): array
     {
-        return [
+        $result = [
             'minorUnits' => $this->minorUnits,
             'scale' => $this->scale,
             'decimal' => $this->toDecimalString(),
         ];
+
+        if ($this->currencyId !== null) {
+            $result['currencyId'] = $this->currencyId;
+        }
+
+        return $result;
     }
 }

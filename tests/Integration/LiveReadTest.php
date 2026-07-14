@@ -19,11 +19,25 @@ final class LiveReadTest extends TestCase
         self::assertIsArray($client->places()->list());
         self::assertIsArray($client->categories()->list());
         self::assertIsArray($client->sources()->list());
-        self::assertIsArray($client->currencies()->list());
+        $currencies = $client->currencies()->list();
+        self::assertIsArray($currencies);
+        $currenciesById = [];
+        foreach ($currencies as $currency) {
+            $currenciesById[$currency->id] = $currency;
+        }
         self::assertIsArray($client->tags()->list());
-        self::assertIsArray($client->balance()->list());
+        $balances = $client->balance()->list();
+        self::assertIsArray($balances);
+        foreach ($balances as $balance) {
+            self::assertSame($balance->currencyId, $balance->sum->currencyId);
+            self::assertSame($currenciesById[$balance->currencyId]->decimalPlaces, $balance->sum->scale);
+        }
         $records = $client->records()->list();
         self::assertIsArray($records);
+        foreach ($records as $record) {
+            self::assertSame($record->currencyId, $record->sum->currencyId);
+            self::assertSame($currenciesById[$record->currencyId]->decimalPlaces, $record->sum->scale);
+        }
         if ($records !== []) {
             $recordsById = $client->records()->byIds([$records[0]->id]);
             self::assertNotSame([], $recordsById);
@@ -35,6 +49,8 @@ final class LiveReadTest extends TestCase
         );
         foreach ($recordsWithBalance as $record) {
             self::assertNotNull($record->balanceAfter);
+            self::assertSame($record->currencyId, $record->balanceAfter->currencyId);
+            self::assertSame($currenciesById[$record->currencyId]->decimalPlaces, $record->balanceAfter->scale);
         }
     }
 }

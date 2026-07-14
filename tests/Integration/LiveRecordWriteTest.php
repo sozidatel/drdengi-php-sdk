@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\TransportException;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
-use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
@@ -31,7 +30,7 @@ final class LiveRecordWriteTest extends TestCase
             $created = $client->records()->createExpense(
                 placeId: $place->id,
                 categoryId: $category->id,
-                amount: MoneyAmount::fromDecimalString('1.23'),
+                amount: $currency->amount('1.23'),
                 currencyId: $currency->id,
                 date: new \DateTimeImmutable('now'),
                 comment: $comment,
@@ -86,7 +85,7 @@ final class LiveRecordWriteTest extends TestCase
             $income = $client->records()->createIncome(
                 placeId: $placeA->id,
                 sourceId: $source->id,
-                amount: MoneyAmount::fromDecimalString('2.34'),
+                amount: $currency->amount('2.34'),
                 currencyId: $currency->id,
                 date: new \DateTimeImmutable('now'),
                 comment: $incomeComment,
@@ -99,7 +98,7 @@ final class LiveRecordWriteTest extends TestCase
             $transfer = $client->records()->createTransfer(
                 fromPlaceId: $placeA->id,
                 toPlaceId: $placeB->id,
-                amount: MoneyAmount::fromDecimalString('1.00'),
+                amount: $currency->amount('1.00'),
                 currencyId: $currency->id,
                 date: new \DateTimeImmutable('now'),
                 comment: $transferComment,
@@ -115,9 +114,9 @@ final class LiveRecordWriteTest extends TestCase
                 $exchangeComment = 'drdengi-php-sdk live exchange ' . bin2hex(random_bytes(4));
                 $exchange = $client->records()->createExchange(
                     placeId: $placeA->id,
-                    soldAmount: MoneyAmount::fromDecimalString('1.00'),
+                    soldAmount: $currency->amount('1.00'),
                     soldCurrencyId: $currency->id,
-                    boughtAmount: MoneyAmount::fromDecimalString('0.50'),
+                    boughtAmount: $currencyB->amount('0.50'),
                     boughtCurrencyId: $currencyB->id,
                     date: new \DateTimeImmutable('now'),
                     comment: $exchangeComment,
@@ -159,7 +158,7 @@ final class LiveRecordWriteTest extends TestCase
             $createdRecord = $client->records()->createExpense(
                 placeId: $place->id,
                 categoryId: $categoryId,
-                amount: MoneyAmount::fromDecimalString('1.11'),
+                amount: $currency->amount('1.11'),
                 currencyId: $currency->id,
                 date: new \DateTimeImmutable('now'),
                 comment: $comment,
@@ -270,8 +269,8 @@ final class LiveRecordWriteTest extends TestCase
             $created = $client->records()->createExpenseGroup(
                 placeId: $place->id,
                 items: [
-                    new ExpenseGroupItem($categoryIds[0], MoneyAmount::fromDecimalString('1.23'), $firstComment),
-                    ['categoryId' => $categoryIds[1], 'amount' => MoneyAmount::fromDecimalString('4.56'), 'comment' => $secondComment],
+                    new ExpenseGroupItem($categoryIds[0], $currency->amount('1.23'), $firstComment),
+                    ['categoryId' => $categoryIds[1], 'amount' => $currency->amount('4.56'), 'comment' => $secondComment],
                 ],
                 currencyId: $currency->id,
                 date: new \DateTimeImmutable('now'),

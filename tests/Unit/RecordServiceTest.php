@@ -7,11 +7,13 @@ namespace Soz\Drebedengi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Service\RecordService;
+use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
 final class RecordServiceTest extends TestCase
@@ -19,7 +21,7 @@ final class RecordServiceTest extends TestCase
     public function testCreateExpenseBuildsSetRecordListPayload(): void
     {
         $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $result = $service->createExpense(
             placeId: '1',
@@ -47,7 +49,7 @@ final class RecordServiceTest extends TestCase
     public function testCreateTransferBuildsPairedRecords(): void
     {
         $transport = new FakeTransport();
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $service->createTransfer(
             fromPlaceId: '1',
@@ -88,7 +90,7 @@ final class RecordServiceTest extends TestCase
     public function testCreateExpenseFormatsDateInAccountTimezone(): void
     {
         $transport = new FakeTransport();
-        $service = new RecordService(
+        $service = $this->service(
             $transport,
             new ClientOptions(new \DateTimeZone('Europe/Podgorica')),
         );
@@ -109,7 +111,7 @@ final class RecordServiceTest extends TestCase
     public function testCreateExpenseGroupReturnsEmptyResponseForEmptyItems(): void
     {
         $transport = new FakeTransport();
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         self::assertSame([], $service->createExpenseGroup(
             placeId: '1',
@@ -123,7 +125,7 @@ final class RecordServiceTest extends TestCase
     public function testCreateExpenseGroupWithOneItemUsesSingleExpensePayload(): void
     {
         $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $result = $service->createExpenseGroup(
             placeId: '1',
@@ -149,7 +151,7 @@ final class RecordServiceTest extends TestCase
         $transport = new FakeTransport([
             'setRecordList' => [['server_id' => '100'], ['server_id' => '101']],
         ]);
-        $service = new RecordService(
+        $service = $this->service(
             $transport,
             new ClientOptions(new \DateTimeZone('Europe/Podgorica')),
         );
@@ -207,7 +209,7 @@ final class RecordServiceTest extends TestCase
     public function testRecordQueryFormatsDateRangeInAccountTimezone(): void
     {
         $transport = new FakeTransport(['getRecordList' => []]);
-        $service = new RecordService(
+        $service = $this->service(
             $transport,
             new ClientOptions(new \DateTimeZone('Europe/Podgorica')),
         );
@@ -228,7 +230,7 @@ final class RecordServiceTest extends TestCase
     public function testReadsRecordsByIdsWithExplicitSafeMode(): void
     {
         $transport = new FakeTransport(['getRecordList' => []]);
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $service->byIds(['10', 20]);
 
@@ -276,7 +278,7 @@ final class RecordServiceTest extends TestCase
                 'sum' => '400',
             ]],
         ]);
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $records = $service->list(
             RecordQuery::forDateRange(
@@ -289,6 +291,8 @@ final class RecordServiceTest extends TestCase
         );
 
         self::assertSame(300, $records[0]->balanceAfter?->minorUnits);
+        self::assertSame(2, $records[0]->balanceAfter?->scale);
+        self::assertSame('3', $records[0]->balanceAfter?->currencyId);
         self::assertSame(['getRecordList', 'getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
         self::assertTrue($transport->calls[0]['arguments'][0]['is_report']);
         self::assertTrue($transport->calls[1]['arguments'][0]['is_report']);
@@ -315,7 +319,7 @@ final class RecordServiceTest extends TestCase
                 'sum' => '500',
             ]],
         ]);
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $records = $service->list(
             RecordQuery::forDateRange(
@@ -332,7 +336,7 @@ final class RecordServiceTest extends TestCase
     public function testRejectsBalanceAfterForConvertedCurrencyBeforeCallingSoap(): void
     {
         $transport = new FakeTransport();
-        $service = new RecordService($transport);
+        $service = $this->service($transport);
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('original currency');
@@ -347,5 +351,122 @@ final class RecordServiceTest extends TestCase
         } finally {
             self::assertSame([], $transport->calls);
         }
+    }
+
+    public function testReadsCryptoRecordWithCurrencyScaleAndBinding(): void
+    {
+        $transport = new FakeTransport(['getRecordList' => [[
+            'id' => '10',
+            'place_id' => '1',
+            'budget_object_id' => '2',
+            'sum' => '1234',
+            'operation_date' => '2026-07-14 12:00:00',
+            'currency_id' => '7',
+            'operation_type' => '3',
+        ]]]);
+        $btc = Currency::fromSoap([
+            'id' => '7',
+            'name' => 'Bitcoin',
+            'code' => 'BTC',
+            'ratio' => '1000000',
+        ]);
+
+        $record = $this->service($transport, currencies: [$btc])->list()[0];
+
+        self::assertSame(8, $record->sum->scale);
+        self::assertSame('7', $record->sum->currencyId);
+        self::assertSame('0.00001234', $record->sum->toDecimalString());
+    }
+
+    public function testRejectsAmountScaleThatDoesNotMatchCurrencyBeforeWrite(): void
+    {
+        $transport = new FakeTransport();
+        $btc = Currency::fromSoap([
+            'id' => '7',
+            'name' => 'Bitcoin',
+            'code' => 'BTC',
+            'ratio' => '1000000',
+        ]);
+        $service = $this->service($transport, currencies: [$btc]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Currency::amount()');
+
+        try {
+            $service->createExpense(
+                placeId: '1',
+                categoryId: '2',
+                amount: MoneyAmount::fromDecimalString('1.00'),
+                currencyId: '7',
+                date: new \DateTimeImmutable('2026-07-14 12:00:00'),
+            );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testCurrencyAmountCreatesValidatedWritePayload(): void
+    {
+        $transport = new FakeTransport();
+        $btc = Currency::fromSoap([
+            'id' => '7',
+            'name' => 'Bitcoin',
+            'code' => 'BTC',
+            'ratio' => '1000000',
+        ]);
+        $service = $this->service($transport, currencies: [$btc]);
+
+        $service->createExpense(
+            placeId: '1',
+            categoryId: '2',
+            amount: $btc->amount('0.00001234'),
+            currencyId: $btc->id,
+            date: new \DateTimeImmutable('2026-07-14 12:00:00'),
+        );
+
+        self::assertSame(-1234, $transport->calls[0]['arguments'][0][0]['sum']);
+    }
+
+    public function testRejectsAmountBoundToAnotherCurrencyBeforeWrite(): void
+    {
+        $transport = new FakeTransport();
+        $btc = Currency::fromSoap(['id' => '7', 'name' => 'Bitcoin', 'code' => 'BTC', 'ratio' => '1000000']);
+        $eth = Currency::fromSoap(['id' => '8', 'name' => 'Ethereum', 'code' => 'ETH', 'ratio' => '1000000']);
+        $service = $this->service($transport, currencies: [$btc, $eth]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('bound to currency ID "7"');
+
+        try {
+            $service->createExpense(
+                placeId: '1',
+                categoryId: '2',
+                amount: $btc->amount('0.00001234'),
+                currencyId: $eth->id,
+                date: new \DateTimeImmutable('2026-07-14 12:00:00'),
+            );
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    /** @param list<Currency>|null $currencies */
+    private function service(
+        FakeTransport $transport,
+        ?ClientOptions $options = null,
+        ?array $currencies = null,
+    ): RecordService {
+        $currencies ??= [Currency::fromSoap([
+            'id' => '3',
+            'name' => 'EUR',
+            'code' => 'EUR',
+            'ratio' => '1',
+        ])];
+
+        return new RecordService(
+            $transport,
+            $options ?? new ClientOptions(),
+            new CurrencyCatalog($transport, $currencies),
+        );
     }
 }

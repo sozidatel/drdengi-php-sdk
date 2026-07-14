@@ -6,23 +6,29 @@ namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
+use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\Record;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class RecordService
 {
+    private CurrencyCatalog $currencies;
+
     public function __construct(
         private TransportInterface $transport,
         private ClientOptions $options = new ClientOptions(),
-    )
-    {
+        ?CurrencyCatalog $currencies = null,
+    ) {
+        $this->currencies = $currencies ?? new CurrencyCatalog($transport);
     }
 
     /**
@@ -41,7 +47,7 @@ final readonly class RecordService
             $this->transport->call('getRecordList', [$params, []]),
         );
         $records = array_map(
-            fn (array $item): Record => Record::fromSoap($item, $this->options->timezone),
+            fn (array $item): Record => $this->recordFromSoap($item),
             $rows,
         );
 
@@ -58,7 +64,7 @@ final readonly class RecordService
      */
     public function byIds(array $ids): array
     {
-        return array_map(fn (array $item): Record => Record::fromSoap($item, $this->options->timezone), DrebedengiNormalizer::listOfArrays(
+        return array_map(fn (array $item): Record => $this->recordFromSoap($item), DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getRecordList', [['is_report' => true], $this->normalizeIds($ids)]),
         ));
     }
@@ -130,6 +136,8 @@ final readonly class RecordService
         \DateTimeInterface $date,
         string $comment = '',
     ): array {
+        $this->assertAmountMatchesCurrency($amount, $currencyId);
+
         return $this->savePayloads([[
             'client_id' => $this->clientId(),
             'place_id' => (string)$placeId,
@@ -154,6 +162,8 @@ final readonly class RecordService
         \DateTimeInterface $date,
         string $comment = '',
     ): array {
+        $this->assertAmountMatchesCurrency($amount, $currencyId);
+
         $fromClientId = $this->clientId();
         $toClientId = $this->clientId();
         if ($fromClientId === $toClientId) {
@@ -204,6 +214,9 @@ final readonly class RecordService
             throw new InvalidArgumentException('Currency exchange requires two different currency ids.');
         }
 
+        $this->assertAmountMatchesCurrency($soldAmount, $soldCurrencyId);
+        $this->assertAmountMatchesCurrency($boughtAmount, $boughtCurrencyId);
+
         $soldClientId = $this->clientId();
         $boughtClientId = $this->clientId();
         if ($soldClientId === $boughtClientId) {
@@ -246,6 +259,8 @@ final readonly class RecordService
         if ($record->id === '') {
             throw new InvalidArgumentException('Cannot update a Drebedengi record without server id.');
         }
+
+        $this->assertAmountMatchesCurrency($record->sum, $record->currencyId);
 
         return $this->savePayloads([$record->toUpdatePayload($this->options->timezone)]);
     }
@@ -324,8 +339,10 @@ final readonly class RecordService
         }
 
         return array_map(
-            static fn (Record $record): Record => array_key_exists($record->id, $balanceAfterById)
-                ? $record->withBalanceAfter(MoneyAmount::fromMinorUnits($balanceAfterById[$record->id]))
+            fn (Record $record): Record => array_key_exists($record->id, $balanceAfterById)
+                ? $record->withBalanceAfter(
+                    $this->currencyFromResponse($record->currencyId)->amountFromMinorUnits($balanceAfterById[$record->id]),
+                )
                 : $record,
             $records,
         );
@@ -392,6 +409,8 @@ final readonly class RecordService
         \DateTimeInterface $date,
         string $comment = '',
     ): array {
+        $this->assertAmountMatchesCurrency($amount, $currencyId);
+
         return [
             'client_id' => $this->clientId(),
             'place_id' => (string)$placeId,
@@ -427,6 +446,53 @@ final readonly class RecordService
             amount: $item['amount'],
             comment: (string)($item['comment'] ?? ''),
         );
+    }
+
+    /** @param array<string, mixed> $raw */
+    private function recordFromSoap(array $raw): Record
+    {
+        $currencyId = DrebedengiNormalizer::string($raw['currency_id'] ?? '');
+
+        return Record::fromSoap(
+            $raw,
+            $this->options->timezone,
+            $this->currencyFromResponse($currencyId),
+        );
+    }
+
+    private function currencyFromResponse(string $currencyId): Currency
+    {
+        return $this->currencies->find($currencyId)
+            ?? throw new UnexpectedResponseException(sprintf(
+                'Record response refers to unknown currency ID "%s".',
+                $currencyId,
+            ));
+    }
+
+    private function assertAmountMatchesCurrency(MoneyAmount $amount, int|string $currencyId): void
+    {
+        $currency = $this->currencies->require($currencyId);
+
+        if ($amount->currencyId !== null && $amount->currencyId !== $currency->id) {
+            throw new InvalidArgumentException(sprintf(
+                'Money amount is bound to currency ID "%s", but currency ID "%s" was requested.',
+                $amount->currencyId,
+                $currency->id,
+            ));
+        }
+
+        if ($amount->scale !== $currency->decimalPlaces) {
+            $label = $currency->code ?? ($currency->name !== '' ? $currency->name : $currency->id);
+
+            throw new InvalidArgumentException(sprintf(
+                'Money amount scale %d does not match currency %s (ID %s) scale %d. '
+                    . 'Create the amount with Currency::amount().',
+                $amount->scale,
+                $label,
+                $currency->id,
+                $currency->decimalPlaces,
+            ));
+        }
     }
 
     /**

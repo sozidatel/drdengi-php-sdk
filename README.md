@@ -176,14 +176,15 @@ foreach ($records as $record) {
 Суммы в SDK представлены как integer minor units, то есть в мельчайших единицах конкретной валюты. Для обычных валют это исторически 2 знака после запятой, а для криптовалют точность может быть выше.
 
 ```php
-use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
+
+$currency = $client->currencies()->require('CURRENCY_ID');
 
 $client->records()->createExpense(
     placeId: 'PLACE_ID',
     categoryId: 'CATEGORY_ID',
-    amount: MoneyAmount::fromDecimalString('12.34'),
-    currencyId: 'CURRENCY_ID',
+    amount: $currency->amount('12.34'),
+    currencyId: $currency->id,
     date: new DateTimeImmutable(),
     comment: 'Обед',
 );
@@ -191,8 +192,8 @@ $client->records()->createExpense(
 $client->records()->createIncome(
     placeId: 'PLACE_ID',
     sourceId: 'SOURCE_ID',
-    amount: MoneyAmount::fromDecimalString('100.00'),
-    currencyId: 'CURRENCY_ID',
+    amount: $currency->amount('100.00'),
+    currencyId: $currency->id,
     date: new DateTimeImmutable(),
     comment: 'Возврат',
 );
@@ -200,8 +201,8 @@ $client->records()->createIncome(
 $client->records()->createTransfer(
     fromPlaceId: 'FROM_PLACE_ID',
     toPlaceId: 'TO_PLACE_ID',
-    amount: MoneyAmount::fromDecimalString('50.00'),
-    currencyId: 'CURRENCY_ID',
+    amount: $currency->amount('50.00'),
+    currencyId: $currency->id,
     date: new DateTimeImmutable(),
     comment: 'Перенос между счетами',
 );
@@ -213,23 +214,36 @@ $client->records()->createTransfer(
 $client->records()->createExpenseGroup(
     placeId: 'PLACE_ID',
     items: [
-        new ExpenseGroupItem('CATEGORY_ID_1', MoneyAmount::fromDecimalString('12.34'), 'Кофе'),
-        ['categoryId' => 'CATEGORY_ID_2', 'amount' => MoneyAmount::fromDecimalString('56.78'), 'comment' => 'Продукты'],
+        new ExpenseGroupItem('CATEGORY_ID_1', $currency->amount('12.34'), 'Кофе'),
+        ['categoryId' => 'CATEGORY_ID_2', 'amount' => $currency->amount('56.78'), 'comment' => 'Продукты'],
     ],
-    currencyId: 'CURRENCY_ID',
+    currencyId: $currency->id,
     date: new DateTimeImmutable(),
 );
 ```
 
 Для нескольких строк SDK отправляет один `setRecordList` с общим `group_id`, который связывает все позиции чека в одну группу.
 
-Для валют с нестандартной точностью передай scale явно или возьми его из `Currency`:
+`Currency::amount()` — рекомендуемый способ создавать суммы: он сам применяет точность из
+`ratio` и связывает `MoneyAmount` с ID валюты. Валюту можно найти без ручного перебора:
 
 ```php
-$btc = $client->currencies()->list()[0]; // пример; в реальном коде найди BTC по code/name
+$btc = $client->currencies()->requireByCode('BTC');
 
-$amount = MoneyAmount::fromDecimalString('0.00001234', $btc->decimalPlaces);
+$amount = $btc->amount('0.00001234');
 ```
+
+Прежний `MoneyAmount::fromDecimalString()` остаётся совместимым для валют с двумя знаками.
+Перед записью SDK загружает каталог валют и проверяет scale, а у суммы от `Currency::amount()` —
+ещё и совпадение `currencyId`. Поэтому потенциально неверная сумма отклоняется до SOAP-вызова.
+Отдельный аргумент `currencyId` в методах `create*()` пока сохранён ради обратной совместимости;
+передавай в него ID той же `Currency`, которая создала сумму. В следующей major-версии этот
+дубль можно будет убрать в пользу обязательной currency-bound суммы.
+
+При чтении через `records()` и `balance()` суммы уже имеют правильный `scale` и связанный
+`currencyId`; вручную применять `withScale()` больше не нужно. Каталог валют лениво кэшируется
+в пределах экземпляра `DrebedengiClient`; для принудительного обновления есть
+`$client->currencies()->refresh()`.
 
 `createTransfer()` и `createExchange()` сами создают парные записи и связывают их через `client_move_id` / `client_change_id`.
 

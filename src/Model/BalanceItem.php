@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Model;
 
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 
 final readonly class BalanceItem implements \JsonSerializable
@@ -28,14 +29,25 @@ final readonly class BalanceItem implements \JsonSerializable
     /**
      * @param array<string, mixed> $raw
      */
-    public static function fromSoap(array $raw): self
+    public static function fromSoap(array $raw, ?Currency $currency = null): self
     {
+        $currencyId = DrebedengiNormalizer::string($raw['currency_id'] ?? '');
+
+        if ($currency !== null && $currency->id !== $currencyId) {
+            throw new InvalidArgumentException(sprintf(
+                'Balance currency ID "%s" does not match supplied currency "%s".',
+                $currencyId,
+                $currency->id,
+            ));
+        }
+
         return new self(
             placeId: DrebedengiNormalizer::string($raw['place_id'] ?? ''),
             placeName: (string)($raw['place_name'] ?? ''),
-            currencyId: DrebedengiNormalizer::string($raw['currency_id'] ?? ''),
+            currencyId: $currencyId,
             currencyName: (string)($raw['currency_name'] ?? ''),
-            sum: MoneyAmount::fromMinorUnits((int)($raw['sum'] ?? 0)),
+            sum: $currency?->amountFromMinorUnits((int)($raw['sum'] ?? 0))
+                ?? MoneyAmount::fromMinorUnits((int)($raw['sum'] ?? 0)),
             parentId: DrebedengiNormalizer::nullableId($raw['parent_id'] ?? null),
             forDuty: DrebedengiNormalizer::bool($raw['is_for_duty'] ?? false),
             creditCard: DrebedengiNormalizer::bool($raw['is_credit_card'] ?? false),

@@ -6,6 +6,7 @@ namespace Soz\Drebedengi\Model;
 
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 
 final readonly class Record implements \JsonSerializable
 {
@@ -34,20 +35,35 @@ final readonly class Record implements \JsonSerializable
     /**
      * @param array<string, mixed> $raw
      */
-    public static function fromSoap(array $raw, ?\DateTimeZone $timezone = null): self
+    public static function fromSoap(
+        array $raw,
+        ?\DateTimeZone $timezone = null,
+        ?Currency $currency = null,
+    ): self
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());
         $operationType = OperationType::from((int)($raw['operation_type'] ?? OperationType::Expense->value));
         $linkedRecordId = DrebedengiNormalizer::nullableId($raw['id2'] ?? null);
+        $currencyId = DrebedengiNormalizer::string($raw['currency_id'] ?? '');
+
+        if ($currency !== null && $currency->id !== $currencyId) {
+            throw new InvalidArgumentException(sprintf(
+                'Record currency ID "%s" does not match supplied currency "%s".',
+                $currencyId,
+                $currency->id,
+            ));
+        }
+
+        $minorUnits = (int)($raw['sum'] ?? $raw['difference'] ?? 0);
 
         return new self(
             id: DrebedengiNormalizer::string($raw['id'] ?? $raw['server_id'] ?? ''),
             placeId: DrebedengiNormalizer::string($raw['place_id'] ?? $raw['budget_account_id'] ?? ''),
             budgetObjectId: DrebedengiNormalizer::string($raw['budget_object_id'] ?? ''),
-            sum: MoneyAmount::fromMinorUnits((int)($raw['sum'] ?? $raw['difference'] ?? 0)),
+            sum: $currency?->amountFromMinorUnits($minorUnits) ?? MoneyAmount::fromMinorUnits($minorUnits),
             operationDate: DrebedengiDateTime::parseDateTime((string)($raw['operation_date'] ?? 'now'), $timezone),
             comment: (string)($raw['comment'] ?? ''),
-            currencyId: DrebedengiNormalizer::string($raw['currency_id'] ?? ''),
+            currencyId: $currencyId,
             duty: DrebedengiNormalizer::bool($raw['is_duty'] ?? false),
             operationType: $operationType,
             serverMoveId: DrebedengiNormalizer::nullableId(

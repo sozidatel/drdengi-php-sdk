@@ -15,17 +15,21 @@ use Soz\Drebedengi\Service\RecordService;
 use Soz\Drebedengi\Service\SourceService;
 use Soz\Drebedengi\Service\SyncService;
 use Soz\Drebedengi\Service\TagService;
+use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Transport\FailoverTransport;
 use Soz\Drebedengi\Transport\SoapTransport;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final class DrebedengiClient
 {
+    private readonly CurrencyCatalog $currencyCatalog;
+
     public function __construct(
         private readonly TransportInterface $transport,
         private readonly ClientOptions $options = new ClientOptions(),
-    )
-    {
+        ?CurrencyCatalog $currencyCatalog = null,
+    ) {
+        $this->currencyCatalog = $currencyCatalog ?? new CurrencyCatalog($transport);
     }
 
     /**
@@ -89,7 +93,7 @@ final class DrebedengiClient
 
     public function records(): RecordService
     {
-        return new RecordService($this->transport, $this->options);
+        return new RecordService($this->transport, $this->options, $this->currencyCatalog);
     }
 
     public function account(): AccountService
@@ -114,7 +118,7 @@ final class DrebedengiClient
 
     public function currencies(): CurrencyService
     {
-        return new CurrencyService($this->transport);
+        return new CurrencyService($this->transport, $this->currencyCatalog);
     }
 
     public function tags(): TagService
@@ -124,7 +128,7 @@ final class DrebedengiClient
 
     public function balance(): BalanceService
     {
-        return new BalanceService($this->transport);
+        return new BalanceService($this->transport, $this->currencyCatalog);
     }
 
     public function sync(): SyncService
