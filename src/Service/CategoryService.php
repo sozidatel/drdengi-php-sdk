@@ -35,6 +35,10 @@ final readonly class CategoryService
      */
     public function byIds(array $ids): array
     {
+        if ($ids === []) {
+            return [];
+        }
+
         return $this->sort(array_map(Category::fromSoap(...), DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getCategoryList', [$this->normalizeIds($ids)]),
         )));

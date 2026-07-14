@@ -32,6 +32,10 @@ final readonly class PlaceService
      */
     public function byIds(array $ids): array
     {
+        if ($ids === []) {
+            return [];
+        }
+
         return $this->sort(array_map(Place::fromSoap(...), DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getPlaceList', [$this->normalizeIds($ids)]),
         )));

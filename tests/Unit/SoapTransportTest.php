@@ -100,6 +100,31 @@ final class SoapTransportTest extends TestCase
         }
     }
 
+    public function testCallerCannotOverrideReservedSoapOptions(): void
+    {
+        $endpoint = new Endpoint('https://example.test/base');
+        $transport = new SoapTransport(
+            new Credentials('api', 'login', 'password'),
+            $endpoint,
+            [
+                'exceptions' => false,
+                'location' => 'https://attacker.test/soap/',
+                'trace' => true,
+                'connection_timeout' => 7,
+            ],
+        );
+
+        $method = new \ReflectionMethod($transport, 'clientOptions');
+        /** @var array<string, mixed> $options */
+        $options = $method->invoke($transport);
+
+        self::assertTrue($options['exceptions']);
+        self::assertSame($endpoint->soapLocation(), $options['location']);
+        self::assertTrue($options['trace']);
+        self::assertSame(7, $options['connection_timeout']);
+        self::assertSame(WSDL_CACHE_NONE, $options['cache_wsdl']);
+    }
+
     private function transportThrowing(
         SoapFault $fault,
         ?Credentials $credentials = null,

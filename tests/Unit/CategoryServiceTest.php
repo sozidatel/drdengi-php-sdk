@@ -76,6 +76,15 @@ final class CategoryServiceTest extends TestCase
         self::assertSame('Visible', $tree[0]->category->name);
     }
 
+    public function testByIdsReturnsEmptyListWithoutSoapCallForEmptyIds(): void
+    {
+        $transport = new FakeTransport();
+        $service = new CategoryService($transport);
+
+        self::assertSame([], $service->byIds([]));
+        self::assertSame([], $transport->calls);
+    }
+
     public function testCreatesCategoryViaSetCategoryList(): void
     {
         $transport = new FakeTransport([

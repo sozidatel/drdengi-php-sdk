@@ -139,7 +139,7 @@ final class DrebedengiClient
 
     public function sync(): SyncService
     {
-        return new SyncService($this->transport, $this->options);
+        return new SyncService($this->transport, $this->options, $this->currencyCatalog);
     }
 
     public function raw(): RawService

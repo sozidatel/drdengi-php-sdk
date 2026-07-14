@@ -12,6 +12,16 @@ use Soz\Drebedengi\Model\RecordQuery;
 
 final class RecordQueryTest extends TestCase
 {
+    public function testBuildsSafeDefaultLast20Payload(): void
+    {
+        $params = (new RecordQuery())->toSoapParams();
+
+        self::assertTrue($params['is_report']);
+        self::assertSame(8, $params['r_period']);
+        self::assertArrayNotHasKey('period_from', $params);
+        self::assertArrayNotHasKey('period_to', $params);
+    }
+
     public function testBuildsSafeDefaultDateRangePayload(): void
     {
         $params = RecordQuery::forDateRange(

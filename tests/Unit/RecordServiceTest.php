@@ -265,6 +265,19 @@ final class RecordServiceTest extends TestCase
         self::assertSame('getRecordList', $transport->calls[0]['method']);
     }
 
+    public function testDefaultAndEmptyRecordQueryBothRequestLast20(): void
+    {
+        $transport = new FakeTransport(['getRecordList' => []]);
+        $service = $this->service($transport);
+
+        $service->list();
+        $service->list(new RecordQuery());
+
+        self::assertCount(2, $transport->calls);
+        self::assertSame(8, $transport->calls[0]['arguments'][0]['r_period']);
+        self::assertSame($transport->calls[0]['arguments'][0], $transport->calls[1]['arguments'][0]);
+    }
+
     public function testReadsRecordsByIdsWithExplicitSafeMode(): void
     {
         $transport = new FakeTransport(['getRecordList' => []]);
@@ -274,6 +287,15 @@ final class RecordServiceTest extends TestCase
 
         self::assertSame(['is_report' => true], $transport->calls[0]['arguments'][0]);
         self::assertSame(['10', '20'], $transport->calls[0]['arguments'][1]);
+    }
+
+    public function testByIdsReturnsEmptyListWithoutSoapCallForEmptyIds(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        self::assertSame([], $service->byIds([]));
+        self::assertSame([], $transport->calls);
     }
 
     public function testAddsBalanceAfterToFilteredRecords(): void
@@ -473,20 +495,20 @@ final class RecordServiceTest extends TestCase
         );
     }
 
-    public function testRejectsBalanceAfterForConvertedCurrencyBeforeCallingSoap(): void
+    public function testRejectsConvertedRecordCurrencyAndPointsToReportsBeforeCallingSoap(): void
     {
         $transport = new FakeTransport();
         $service = $this->service($transport);
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('original currency');
+        $this->expectExceptionMessage('Use ReportQuery');
 
         try {
             $service->list(
                 RecordQuery::forDateRange(
                     new \DateTimeImmutable('2026-01-01'),
                     new \DateTimeImmutable('2026-01-02'),
-                )->convertedToCurrency('3')->withBalanceAfter(),
+                )->convertedToCurrency('3'),
             );
         } finally {
             self::assertSame([], $transport->calls);

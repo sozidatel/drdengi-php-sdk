@@ -37,11 +37,14 @@ final readonly class RecordService
      */
     public function list(?RecordQuery $query = null): array
     {
-        $query ??= (new RecordQuery())->last20();
+        $query ??= new RecordQuery();
         $params = $query->toSoapParams($this->options->timezone);
 
-        if ($query->shouldIncludeBalanceAfter() && (string)$params['r_currency'] !== '0') {
-            throw new InvalidArgumentException('Balance after a record is only available in the original currency.');
+        if ((string)$params['r_currency'] !== '0') {
+            throw new InvalidArgumentException(
+                'RecordService only supports records in their original currency. '
+                . 'Use ReportQuery for converted financial amounts.',
+            );
         }
         if ($query->shouldIncludeBalanceAfter() && $query->shouldIncludePlanned()) {
             throw new InvalidArgumentException('Balance after a record cannot be combined with planned records.');
@@ -68,6 +71,10 @@ final readonly class RecordService
      */
     public function byIds(array $ids): array
     {
+        if ($ids === []) {
+            return [];
+        }
+
         return array_map(fn (array $item): Record => $this->recordFromSoap($item), DrebedengiNormalizer::listOfArrays(
             $this->transport->call('getRecordList', [['is_report' => true], $this->normalizeIds($ids)]),
         ));

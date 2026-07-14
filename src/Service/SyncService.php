@@ -5,19 +5,25 @@ declare(strict_types=1);
 namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\ClientOptions;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\Change;
+use Soz\Drebedengi\Model\Currency;
 use Soz\Drebedengi\Model\Record;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class SyncService
 {
+    private CurrencyCatalog $currencies;
+
     public function __construct(
         private TransportInterface $transport,
         private ClientOptions $options = new ClientOptions(),
-    )
-    {
+        ?CurrencyCatalog $currencies = null,
+    ) {
+        $this->currencies = $currencies ?? new CurrencyCatalog($transport);
     }
 
     public function currentRevision(): int
@@ -50,16 +56,41 @@ final readonly class SyncService
      */
     public function initialRecords(): array
     {
+        // Resolve and validate currencies before the state-changing initial-sync
+        // request clears Drebedengi's client ID deduplication mappings.
+        $this->currencies->list();
+
         $params = (new RecordQuery())
             ->allTime()
             ->toSoapParams($this->options->timezone);
         $params['is_report'] = false;
 
         return array_map(
-            fn (array $item): Record => Record::fromSoap($item, $this->options->timezone),
+            fn (array $item): Record => $this->recordFromSoap($item),
             DrebedengiNormalizer::listOfArrays(
                 $this->transport->call('getRecordList', [$params, []]),
             ),
         );
+    }
+
+    /** @param array<string, mixed> $raw */
+    private function recordFromSoap(array $raw): Record
+    {
+        $currencyId = DrebedengiNormalizer::requiredString($raw, 'currency_id', 'record');
+
+        return Record::fromSoap(
+            $raw,
+            $this->options->timezone,
+            $this->currencyFromResponse($currencyId),
+        );
+    }
+
+    private function currencyFromResponse(string $currencyId): Currency
+    {
+        return $this->currencies->find($currencyId)
+            ?? throw new UnexpectedResponseException(sprintf(
+                'Record response refers to unknown currency ID "%s".',
+                $currencyId,
+            ));
     }
 }

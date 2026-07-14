@@ -59,12 +59,7 @@ final class SoapTransport implements TransportInterface
             return $this->client;
         }
 
-        $options = $this->soapOptions + [
-            'exceptions' => true,
-            'trace' => false,
-            'cache_wsdl' => WSDL_CACHE_NONE,
-            'location' => $this->endpoint->soapLocation(),
-        ];
+        $options = $this->clientOptions();
 
         try {
             $this->client = new SoapClient($this->endpoint->wsdlUri(), $options);
@@ -80,6 +75,29 @@ final class SoapTransport implements TransportInterface
         }
 
         return $this->client;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function clientOptions(): array
+    {
+        return array_replace(
+            [
+                'exceptions' => true,
+                'trace' => false,
+                'cache_wsdl' => WSDL_CACHE_NONE,
+                'location' => $this->endpoint->soapLocation(),
+            ],
+            $this->soapOptions,
+            [
+                // These options are part of the transport contract. Disabling
+                // exceptions bypasses fault classification, while overriding
+                // location can silently send credentials to another endpoint.
+                'exceptions' => true,
+                'location' => $this->endpoint->soapLocation(),
+            ],
+        );
     }
 
     private function isInfrastructureFault(SoapFault $exception): bool

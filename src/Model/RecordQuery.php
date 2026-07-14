@@ -22,7 +22,7 @@ final class RecordQuery
 
     private bool $showDuty = true;
     private bool $withPlanned = false;
-    private int $period = self::PERIOD_CUSTOM;
+    private int $period = self::PERIOD_LAST_20;
     private ?\DateTimeInterface $from = null;
     private ?\DateTimeInterface $to = null;
     private ?\DateTimeInterface $relativeTo = null;

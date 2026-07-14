@@ -4,7 +4,7 @@
 
 ## Endpoint
 
-Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены. По умолчанию используется только `Endpoint::RU_BASE_URI`; зеркало ME или последовательность failover нужно указывать явно.
+Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены. По умолчанию используется только `Endpoint::RU_BASE_URI`; зеркало ME или последовательность failover нужно указывать явно. `location` и `exceptions` зарезервированы транспортом и не могут быть переопределены через caller-provided `soapOptions`; остальные SOAP options сохраняются.
 
 ## anyType
 
@@ -28,8 +28,10 @@ ratio=1000000 => 8 знаков после запятой
 ```
 
 SDK лениво загружает `getCurrencyList` один раз на экземпляр `DrebedengiClient`. Поэтому суммы,
-полученные через `RecordService` и `BalanceService`, сразу имеют правильный `scale` и связанный
-`currencyId`. То же относится к вычисленному `Record::balanceAfter`.
+полученные через `RecordService`, `BalanceService` и `SyncService::initialRecords()`, сразу имеют
+правильный `scale` и связанный `currencyId`. То же относится к вычисленному
+`Record::balanceAfter`. Для initial sync каталог загружается до state-changing `getRecordList`,
+чтобы ошибка справочника не возникла уже после очистки серверной дедупликации.
 
 Для записи рекомендуемый конструктор — `$currency->amount('0.00001234')`. Старый
 `MoneyAmount::fromDecimalString()` сохранён для совместимости, но перед `setRecordList` SDK
@@ -87,10 +89,15 @@ is_with_null   includeZero(), включить счета с нулевым ос
 
 `RecordQuery` покрывает все периоды detail-журнала: произвольный диапазон, сегодня, текущий
 и прошлый месяц, текущий квартал, текущий и прошлый год, всё время и последние 20 операций.
+Пустой `RecordQuery` означает последние 20 операций, как и `RecordService::list()` без query.
 `relative_date` задаётся через `relativeTo()` и форматируется в timezone аккаунта. Также доступны
 `r_who`, `is_show_duty`, `is_with_planned` и направления include/exclude для счетов, тегов и
 категорий. Агрегирующие `r_how=2/3` намеренно не входят в `RecordQuery`, потому что сервер
 возвращает для них строки отчёта другой формы, а не `Record`.
+
+Detail-журнал SDK допускает только `r_currency=0`: при пересчёте сервер может вернуть дробный
+`difference`, который не является обновляемой операцией с целым количеством minor units.
+Пересчёт валют поддерживается типизированным `ReportQuery::convertedToCurrency()`.
 
 Плановые строки detail-журнала помечены `is_planned` и дополнительно содержат `repeat_id`,
 `period_id` и `init_date`; SDK отображает их в типизированные поля `Record`. Сочетание

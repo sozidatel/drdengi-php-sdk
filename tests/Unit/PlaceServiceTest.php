@@ -57,6 +57,15 @@ final class PlaceServiceTest extends TestCase
         self::assertSame(['10'], array_map(static fn ($place): string => $place->id, $service->folders()));
     }
 
+    public function testByIdsReturnsEmptyListWithoutSoapCallForEmptyIds(): void
+    {
+        $transport = new FakeTransport();
+        $service = new PlaceService($transport);
+
+        self::assertSame([], $service->byIds([]));
+        self::assertSame([], $transport->calls);
+    }
+
     public function testUpdateForcesServerIdFromMethodArgument(): void
     {
         $transport = new FakeTransport(['setPlaceList' => [['server_id' => '10']]]);
