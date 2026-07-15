@@ -8,6 +8,27 @@ use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 
+/**
+ * @phpstan-type SoapParams array{
+ *     is_report: bool,
+ *     is_show_duty: bool,
+ *     is_with_planned: bool,
+ *     r_period: int,
+ *     r_how: int,
+ *     r_what: int,
+ *     r_who: int,
+ *     r_currency: int|string,
+ *     r_is_place: int,
+ *     r_is_tag: int,
+ *     r_is_category: int,
+ *     period_from?: string,
+ *     period_to?: string,
+ *     relative_date?: string,
+ *     r_place?: list<string>,
+ *     r_tag?: list<string>,
+ *     r_category?: list<string>
+ * }
+ */
 final class RecordQuery
 {
     private const PERIOD_CUSTOM = 0;
@@ -271,9 +292,7 @@ final class RecordQuery
         return $this->withPlanned;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
+    /** @return SoapParams */
     public function toSoapParams(?\DateTimeZone $timezone = null): array
     {
         $timezone ??= new \DateTimeZone(date_default_timezone_get());

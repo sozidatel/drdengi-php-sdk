@@ -75,7 +75,7 @@ final readonly class Record implements \JsonSerializable
             budgetObjectId: $budgetObjectId,
             sum: $currency?->amountFromMinorUnits($sum) ?? MoneyAmount::fromMinorUnits($sum),
             operationDate: DrebedengiDateTime::parseDateTime($operationDate, $timezone),
-            comment: (string)($raw['comment'] ?? ''),
+            comment: DrebedengiNormalizer::text($raw['comment'] ?? ''),
             currencyId: $currencyId,
             duty: DrebedengiNormalizer::bool($raw['is_duty'] ?? false),
             operationType: $operationType,
@@ -97,11 +97,16 @@ final readonly class Record implements \JsonSerializable
 
     private static function optionalDateTime(mixed $value, \DateTimeZone $timezone): ?\DateTimeImmutable
     {
-        if (!is_scalar($value) || trim((string)$value) === '') {
+        if ($value === null) {
             return null;
         }
 
-        return DrebedengiDateTime::parseDateTime(trim((string)$value), $timezone);
+        $value = DrebedengiNormalizer::string($value);
+        if ($value === '') {
+            return null;
+        }
+
+        return DrebedengiDateTime::parseDateTime($value, $timezone);
     }
 
     /**
@@ -203,8 +208,51 @@ final readonly class Record implements \JsonSerializable
         );
     }
 
+    /**
+     * @return array{
+     *     id: string,
+     *     placeId: string,
+     *     budgetObjectId: string,
+     *     sum: MoneyAmount,
+     *     operationDate: \DateTimeImmutable,
+     *     comment: string,
+     *     currencyId: string,
+     *     duty: bool,
+     *     operationType: OperationType,
+     *     serverMoveId: string|null,
+     *     serverChangeId: string|null,
+     *     groupId: string|null,
+     *     userId: string|null,
+     *     raw: array<string, mixed>,
+     *     balanceAfter: MoneyAmount|null,
+     *     planned: bool,
+     *     plannedRepeatId: string|null,
+     *     plannedPeriodId: string|null,
+     *     plannedInitialDate: \DateTimeImmutable|null
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'id' => $this->id,
+            'placeId' => $this->placeId,
+            'budgetObjectId' => $this->budgetObjectId,
+            'sum' => $this->sum,
+            'operationDate' => $this->operationDate,
+            'comment' => $this->comment,
+            'currencyId' => $this->currencyId,
+            'duty' => $this->duty,
+            'operationType' => $this->operationType,
+            'serverMoveId' => $this->serverMoveId,
+            'serverChangeId' => $this->serverChangeId,
+            'groupId' => $this->groupId,
+            'userId' => $this->userId,
+            'raw' => $this->raw,
+            'balanceAfter' => $this->balanceAfter,
+            'planned' => $this->planned,
+            'plannedRepeatId' => $this->plannedRepeatId,
+            'plannedPeriodId' => $this->plannedPeriodId,
+            'plannedInitialDate' => $this->plannedInitialDate,
+        ];
     }
 }

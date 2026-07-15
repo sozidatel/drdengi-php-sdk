@@ -6,6 +6,7 @@ namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\DrebedengiClient;
+use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Service\CurrencyService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -68,5 +69,67 @@ final class CurrencyServiceTest extends TestCase
             $transport->calls,
             static fn (array $call): bool => $call['method'] === 'getCurrencyList',
         )));
+    }
+
+    public function testFailedRefreshKeepsLastValidCatalog(): void
+    {
+        $valid = [[
+            'id' => '7',
+            'name' => 'Bitcoin',
+            'code' => 'BTC',
+            'ratio' => '1000000',
+        ]];
+        $invalid = [[
+            'id' => '3',
+            'name' => 'Euro',
+            'code' => 'EUR',
+            'ratio' => '3',
+        ]];
+        $transport = new FakeTransport([
+            'getCurrencyList' => ['__sequence' => [$valid, $invalid]],
+        ]);
+        $service = new CurrencyService($transport);
+        $cached = $service->require('7');
+
+        try {
+            $service->refresh();
+            self::fail('Invalid refreshed currency data must be rejected.');
+        } catch (UnexpectedResponseException) {
+            // Expected: the old cache must remain intact below.
+        }
+
+        self::assertSame($cached, $service->require('7'));
+        self::assertNull($service->find('3'));
+        self::assertCount(2, $transport->calls);
+    }
+
+    public function testDuplicateIdRefreshIsRejectedWithoutReplacingValidCatalog(): void
+    {
+        $valid = [[
+            'id' => '7',
+            'name' => 'Bitcoin',
+            'code' => 'BTC',
+            'ratio' => '1000000',
+        ]];
+        $duplicates = [
+            ['id' => '3', 'name' => 'Euro', 'code' => 'EUR', 'ratio' => '1'],
+            ['id' => '3', 'name' => 'Other euro', 'code' => 'EUR2', 'ratio' => '100'],
+        ];
+        $transport = new FakeTransport([
+            'getCurrencyList' => ['__sequence' => [$valid, $duplicates]],
+        ]);
+        $service = new CurrencyService($transport);
+        $cached = $service->require('7');
+
+        try {
+            $service->refresh();
+            self::fail('Duplicate currency IDs must be rejected.');
+        } catch (UnexpectedResponseException $exception) {
+            self::assertStringContainsString('duplicate ID "3"', $exception->getMessage());
+        }
+
+        self::assertSame($cached, $service->require('7'));
+        self::assertNull($service->find('3'));
+        self::assertCount(2, $transport->calls);
     }
 }

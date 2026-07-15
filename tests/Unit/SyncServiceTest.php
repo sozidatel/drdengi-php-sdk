@@ -12,6 +12,39 @@ use Soz\Drebedengi\Tests\Support\FakeTransport;
 
 final class SyncServiceTest extends TestCase
 {
+    public function testReadsCurrentRevisionFromIntegerAndCanonicalString(): void
+    {
+        $integerTransport = new FakeTransport(['getCurrentRevision' => 42]);
+        $stringTransport = new FakeTransport(['getCurrentRevision' => ' 42 ']);
+
+        self::assertSame(42, (new SyncService($integerTransport))->currentRevision());
+        self::assertSame(42, (new SyncService($stringTransport))->currentRevision());
+    }
+
+    public function testRejectsMalformedCurrentRevisionInsteadOfCoercingItToZero(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('getCurrentRevision response must be a non-negative integer');
+
+        (new SyncService(new FakeTransport(['getCurrentRevision' => 'broken'])))->currentRevision();
+    }
+
+    public function testRejectsNegativeCurrentRevision(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('getCurrentRevision response must be a non-negative integer');
+
+        (new SyncService(new FakeTransport(['getCurrentRevision' => -1])))->currentRevision();
+    }
+
+    public function testRejectsNonScalarCurrentRevision(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('got array');
+
+        (new SyncService(new FakeTransport(['getCurrentRevision' => []])))->currentRevision();
+    }
+
     public function testInitialRecordsUsesExplicitStateChangingSyncMode(): void
     {
         $transport = new FakeTransport([
@@ -41,7 +74,7 @@ final class SyncServiceTest extends TestCase
         self::assertSame('-0.00001234', $records[0]->sum->toDecimalString());
         self::assertSame(['getCurrencyList', 'getRecordList'], array_column($transport->calls, 'method'));
 
-        $params = $transport->calls[1]['arguments'][0];
+        $params = $transport->mapArgument(1);
         self::assertFalse($params['is_report']);
         self::assertSame(6, $params['r_period']);
         self::assertSame(6, $params['r_what']);

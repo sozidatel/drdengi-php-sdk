@@ -50,7 +50,9 @@ final readonly class Currency implements \JsonSerializable
             id: DrebedengiNormalizer::requiredString($raw, 'id', 'currency'),
             name: DrebedengiNormalizer::requiredString($raw, 'name', 'currency'),
             code: DrebedengiNormalizer::nullableId($raw['code'] ?? null),
-            course: array_key_exists('course', $raw) ? (string)$raw['course'] : null,
+            course: array_key_exists('course', $raw)
+                ? DrebedengiNormalizer::nullableText($raw['course'])
+                : null,
             familyId: DrebedengiNormalizer::nullableId($raw['family_id'] ?? null),
             default: DrebedengiNormalizer::bool($raw['is_default'] ?? false),
             autoUpdate: DrebedengiNormalizer::bool($raw['is_autoupdate'] ?? false),
@@ -96,8 +98,37 @@ final readonly class Currency implements \JsonSerializable
         return MoneyAmount::fromMinorUnits($minorUnits, $this->decimalPlaces, $this->id);
     }
 
+    /**
+     * @return array{
+     *     id: string,
+     *     name: string,
+     *     code: string|null,
+     *     course: string|null,
+     *     familyId: string|null,
+     *     default: bool,
+     *     autoUpdate: bool,
+     *     hidden: bool,
+     *     investing: bool,
+     *     ratio: int,
+     *     decimalPlaces: int,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'code' => $this->code,
+            'course' => $this->course,
+            'familyId' => $this->familyId,
+            'default' => $this->default,
+            'autoUpdate' => $this->autoUpdate,
+            'hidden' => $this->hidden,
+            'investing' => $this->investing,
+            'ratio' => $this->ratio,
+            'decimalPlaces' => $this->decimalPlaces,
+            'raw' => $this->raw,
+        ];
     }
 }

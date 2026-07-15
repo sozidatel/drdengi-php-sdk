@@ -71,8 +71,25 @@ final readonly class Change implements \JsonSerializable
         );
     }
 
+    /**
+     * @return array{
+     *     revision: int,
+     *     action: ChangeAction,
+     *     objectType: ChangedObjectType,
+     *     objectId: string,
+     *     date: \DateTimeImmutable|null,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'revision' => $this->revision,
+            'action' => $this->action,
+            'objectType' => $this->objectType,
+            'objectId' => $this->objectId,
+            'date' => $this->date,
+            'raw' => $this->raw,
+        ];
     }
 }

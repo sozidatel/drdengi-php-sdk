@@ -12,26 +12,59 @@ use Soz\Drebedengi\Endpoint;
 
 final class LiveClientFactory
 {
-    public static function clientOrSkip(TestCase $testCase): DrebedengiClient
+    public static function readClientOrSkip(TestCase $testCase): DrebedengiClient
     {
-        if (($_ENV['DREB_RUN_LIVE_TESTS'] ?? '0') !== '1') {
-            $testCase::markTestSkipped('Set DREB_RUN_LIVE_TESTS=1 to run Drebedengi live integration tests.');
+        if (
+            self::environmentValue('DREB_RUN_LIVE_READ_TESTS', '0') !== '1'
+            && self::environmentValue('DREB_RUN_LIVE_TESTS', '0') !== '1'
+        ) {
+            $testCase::markTestSkipped(
+                'Set DREB_RUN_LIVE_READ_TESTS=1 to run read-only Drebedengi integration tests.',
+            );
         }
 
+        return self::clientOrSkipForCredentials($testCase);
+    }
+
+    public static function writeClientOrSkip(TestCase $testCase): DrebedengiClient
+    {
+        if (self::environmentValue('DREB_RUN_LIVE_WRITE_TESTS', '0') !== '1') {
+            $testCase::markTestSkipped(
+                'Set DREB_RUN_LIVE_WRITE_TESTS=1 to run state-changing Drebedengi integration tests.',
+            );
+        }
+
+        return self::clientOrSkipForCredentials($testCase);
+    }
+
+    private static function clientOrSkipForCredentials(TestCase $testCase): DrebedengiClient
+    {
         foreach (['DREB_TEST_API_ID', 'DREB_TEST_LOGIN', 'DREB_TEST_PASSWORD'] as $name) {
-            if (trim((string)($_ENV[$name] ?? '')) === '') {
+            if (trim(self::environmentValue($name)) === '') {
                 $testCase::markTestSkipped(sprintf('Missing %s for Drebedengi live integration tests.', $name));
             }
         }
 
         return DrebedengiClient::fromCredentials(
             new Credentials(
-                (string)$_ENV['DREB_TEST_API_ID'],
-                (string)$_ENV['DREB_TEST_LOGIN'],
-                (string)$_ENV['DREB_TEST_PASSWORD'],
+                self::environmentValue('DREB_TEST_API_ID'),
+                self::environmentValue('DREB_TEST_LOGIN'),
+                self::environmentValue('DREB_TEST_PASSWORD'),
             ),
-            new Endpoint((string)($_ENV['DREB_TEST_BASE_URI'] ?? Endpoint::DEFAULT_BASE_URI)),
-            new ClientOptions(new \DateTimeZone((string)($_ENV['DREB_TEST_TIMEZONE'] ?? 'UTC'))),
+            new Endpoint(self::environmentValue('DREB_TEST_BASE_URI', Endpoint::DEFAULT_BASE_URI)),
+            new ClientOptions(new \DateTimeZone(self::environmentValue('DREB_TEST_TIMEZONE', 'UTC'))),
         );
+    }
+
+    private static function environmentValue(string $name, string $default = ''): string
+    {
+        $processValue = getenv($name);
+        if ($processValue !== false) {
+            return $processValue;
+        }
+
+        $value = $_ENV[$name] ?? $_SERVER[$name] ?? $default;
+
+        return is_scalar($value) ? (string)$value : $default;
     }
 }

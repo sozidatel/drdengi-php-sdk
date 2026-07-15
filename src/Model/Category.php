@@ -38,8 +38,27 @@ final readonly class Category implements \JsonSerializable
         );
     }
 
+    /**
+     * @return array{
+     *     id: string,
+     *     name: string,
+     *     parentId: string|null,
+     *     familyId: string|null,
+     *     hidden: bool,
+     *     sort: string|null,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'parentId' => $this->parentId,
+            'familyId' => $this->familyId,
+            'hidden' => $this->hidden,
+            'sort' => $this->sort,
+            'raw' => $this->raw,
+        ];
     }
 }

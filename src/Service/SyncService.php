@@ -28,7 +28,25 @@ final readonly class SyncService
 
     public function currentRevision(): int
     {
-        return (int)$this->transport->call('getCurrentRevision');
+        $response = $this->transport->call('getCurrentRevision');
+        if (is_int($response)) {
+            if ($response >= 0) {
+                return $response;
+            }
+        } elseif (is_string($response)) {
+            $value = trim($response);
+            if (preg_match('/^(?:0|[1-9]\d*)$/D', $value) === 1) {
+                $revision = filter_var($value, FILTER_VALIDATE_INT);
+                if ($revision !== false) {
+                    return $revision;
+                }
+            }
+        }
+
+        throw new UnexpectedResponseException(sprintf(
+            'Drebedengi getCurrentRevision response must be a non-negative integer, got %s.',
+            get_debug_type($response),
+        ));
     }
 
     /**

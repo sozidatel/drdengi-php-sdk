@@ -14,35 +14,37 @@ final class LiveReadTest extends TestCase
 {
     public function testCanReadCoreDataFromDrebedengi(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = LiveClientFactory::readClientOrSkip($this);
 
         self::assertGreaterThanOrEqual(0, $client->sync()->currentRevision());
         self::assertNotSame('', $client->account()->userId());
-        self::assertIsArray($client->places()->list());
-        self::assertIsArray($client->categories()->list());
-        self::assertIsArray($client->sources()->list());
+        $client->account()->hasAccess();
+        $client->account()->rightAccess();
+        $client->account()->subscriptionStatus();
+        $client->account()->expireDate();
+        $client->places()->list();
+        $client->categories()->list();
+        $client->sources()->list();
         $currencies = $client->currencies()->list();
-        self::assertIsArray($currencies);
+        self::assertNotEmpty($currencies);
         $currenciesById = [];
         foreach ($currencies as $currency) {
             $currenciesById[$currency->id] = $currency;
         }
-        self::assertIsArray($client->tags()->list());
+        $client->tags()->list();
         $balances = $client->balance()->list();
-        self::assertIsArray($balances);
         foreach ($balances as $balance) {
             self::assertSame($balance->currencyId, $balance->sum->currencyId);
             self::assertSame($currenciesById[$balance->currencyId]->decimalPlaces, $balance->sum->scale);
         }
-        self::assertIsArray($client->balance()->list(
+        $client->balance()->list(
             BalanceQuery::at(new \DateTimeImmutable('today'))
                 ->includeHidden()
                 ->includeZero()
                 ->subtractAccumulations()
                 ->subtractDebts(),
-        ));
+        );
         $records = $client->records()->list();
-        self::assertIsArray($records);
         foreach ($records as $record) {
             self::assertSame($record->currencyId, $record->sum->currencyId);
             self::assertSame($currenciesById[$record->currencyId]->decimalPlaces, $record->sum->scale);
@@ -61,17 +63,15 @@ final class LiveReadTest extends TestCase
             self::assertSame($record->currencyId, $record->balanceAfter->currencyId);
             self::assertSame($currenciesById[$record->currencyId]->decimalPlaces, $record->balanceAfter->scale);
         }
-        self::assertIsArray($client->records()->list(
+        $client->records()->list(
             (new RecordQuery())->today()->includePlanned()->includeDebts(),
-        ));
+        );
 
         $reportQuery = (new ReportQuery())
             ->thisMonth()
             ->convertedToCurrency($currencies[0]->id);
         $expenseReport = $client->reports()->expensesByCategory($reportQuery);
         $incomeReport = $client->reports()->incomeBySource($reportQuery);
-        self::assertIsArray($expenseReport);
-        self::assertIsArray($incomeReport);
         foreach ([...$expenseReport, ...$incomeReport] as $row) {
             self::assertSame($row->currencyId, $row->amount->currencyId);
             self::assertSame($currenciesById[$row->currencyId]->decimalPlaces, $row->amount->scale);

@@ -25,7 +25,7 @@ final class CurrencyCatalog
         $this->currencies = $currencies;
 
         if ($currencies !== null) {
-            $this->index($currencies);
+            $this->byId = $this->buildIndex($currencies);
         }
     }
 
@@ -33,11 +33,7 @@ final class CurrencyCatalog
     public function list(): array
     {
         if ($this->currencies === null) {
-            $this->currencies = array_map(
-                static fn (array $item): Currency => Currency::fromSoap($item),
-                DrebedengiNormalizer::listOfArrays($this->transport->call('getCurrencyList')),
-            );
-            $this->index($this->currencies);
+            return $this->refresh();
         }
 
         return $this->currencies;
@@ -46,10 +42,18 @@ final class CurrencyCatalog
     /** @return list<Currency> */
     public function refresh(): array
     {
-        $this->currencies = null;
-        $this->byId = null;
+        $currencies = array_map(
+            static fn (array $item): Currency => Currency::fromSoap($item),
+            DrebedengiNormalizer::listOfArrays($this->transport->call('getCurrencyList')),
+        );
+        $byId = $this->buildIndex($currencies);
 
-        return $this->list();
+        // Replace both views only after the complete response has been parsed
+        // and validated. A failed refresh must leave the last valid catalog usable.
+        $this->currencies = $currencies;
+        $this->byId = $byId;
+
+        return $currencies;
     }
 
     public function find(int|string $id): ?Currency
@@ -65,17 +69,28 @@ final class CurrencyCatalog
             ?? throw new InvalidArgumentException(sprintf('Unknown currency ID "%s".', (string)$id));
     }
 
-    /** @param list<Currency> $currencies */
-    private function index(array $currencies): void
+    /**
+     * @param list<Currency> $currencies
+     * @return array<string, Currency>
+     */
+    private function buildIndex(array $currencies): array
     {
-        $this->byId = [];
+        $byId = [];
 
         foreach ($currencies as $currency) {
             if ($currency->id === '') {
                 throw new UnexpectedResponseException('Currency response contains an empty ID.');
             }
+            if (isset($byId[$currency->id])) {
+                throw new UnexpectedResponseException(sprintf(
+                    'Currency response contains duplicate ID "%s".',
+                    $currency->id,
+                ));
+            }
 
-            $this->byId[$currency->id] = $currency;
+            $byId[$currency->id] = $currency;
         }
+
+        return $byId;
     }
 }

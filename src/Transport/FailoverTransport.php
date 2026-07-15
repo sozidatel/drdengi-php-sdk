@@ -21,7 +21,6 @@ final class FailoverTransport implements TransportInterface
         'getCurrentRevision' => true,
         'getExpireDate' => true,
         'getPlaceList' => true,
-        'getRecordList' => true,
         'getRightAccess' => true,
         'getSourceList' => true,
         'getSubscriptionStatus' => true,
@@ -31,19 +30,24 @@ final class FailoverTransport implements TransportInterface
 
     private ?int $activeIndex = null;
 
+    /** @var non-empty-array<string, TransportInterface> */
+    private readonly array $transports;
+
     /**
-     * @param non-empty-array<string, TransportInterface> $transports Map of base URI to transport.
+     * @param array<string, TransportInterface> $transports Map of base URI to transport.
      */
-    public function __construct(private readonly array $transports)
+    public function __construct(array $transports)
     {
         if ($transports === []) {
             throw new \InvalidArgumentException('Failover transport requires at least one endpoint.');
         }
+
+        $this->transports = $transports;
     }
 
     public function call(string $method, array $arguments = []): mixed
     {
-        if (!isset(self::READ_ONLY_METHODS[$method])) {
+        if (!$this->isReadOnlyCall($method, $arguments)) {
             $this->selectEndpoint();
 
             // A mutation is deliberately sent only once. If its response is lost,
@@ -51,11 +55,17 @@ final class FailoverTransport implements TransportInterface
             try {
                 return $this->activeTransport()->call($method, $arguments);
             } catch (EndpointUnavailableException $exception) {
+                $failedEndpoint = $this->activeEndpoint();
+                // The failed mutation is never retried. Clear only the sticky
+                // selection so a later, distinct mutation performs a fresh
+                // read-only endpoint probe before it is sent once.
+                $this->activeIndex = null;
+
                 throw new EndpointUnavailableException(
                     sprintf(
                         'Drebedengi mutation "%s" may have reached %s; it was not retried.',
                         $method,
-                        $this->activeEndpoint(),
+                        $failedEndpoint,
                     ),
                     0,
                     $exception,
@@ -64,6 +74,24 @@ final class FailoverTransport implements TransportInterface
         }
 
         return $this->callReadOnly($method, $arguments);
+    }
+
+    /**
+     * getRecordList is read-only only in explicit report mode. Drebedengi uses
+     * is_report=false for initial synchronization and clears deduplication
+     * state, so an unknown or legacy argument shape must remain a mutation.
+     *
+     * @param list<mixed> $arguments
+     */
+    private function isReadOnlyCall(string $method, array $arguments): bool
+    {
+        if ($method !== 'getRecordList') {
+            return isset(self::READ_ONLY_METHODS[$method]);
+        }
+
+        $params = $arguments[0] ?? null;
+
+        return is_array($params) && ($params['is_report'] ?? null) === true;
     }
 
     private function selectEndpoint(): void
@@ -84,8 +112,10 @@ final class FailoverTransport implements TransportInterface
         $startIndex = $this->activeIndex ?? 0;
         $endpoints = array_keys($this->transports);
         $transports = array_values($this->transports);
+        $count = count($transports);
 
-        for ($index = $startIndex, $count = count($transports); $index < $count; $index++) {
+        for ($offset = 0; $offset < $count; $offset++) {
+            $index = ($startIndex + $offset) % $count;
             $attempts[] = $endpoints[$index];
 
             try {
@@ -94,7 +124,11 @@ final class FailoverTransport implements TransportInterface
 
                 return $result;
             } catch (EndpointUnavailableException $exception) {
-                if ($index === $count - 1) {
+                if ($offset === $count - 1) {
+                    // No endpoint is currently known to be healthy. A later
+                    // mutation must run a fresh read-only probe from primary.
+                    $this->activeIndex = null;
+
                     throw new EndpointUnavailableException(
                         sprintf(
                             'Drebedengi SOAP endpoints are unavailable; attempted: %s.',

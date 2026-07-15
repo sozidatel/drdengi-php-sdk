@@ -43,7 +43,7 @@ final class ReportServiceTest extends TestCase
         self::assertSame('-9057.3831561769', $rows[0]->amount->minorUnits);
         self::assertSame('-90.573831561769', $rows[0]->amount->toDecimalString());
 
-        $params = $transport->calls[0]['arguments'][0];
+        $params = $transport->mapArgument(0);
         self::assertSame(3, $params['r_what']);
         self::assertSame(3, $params['r_how']);
         self::assertSame('18', $params['r_currency']);
@@ -67,8 +67,8 @@ final class ReportServiceTest extends TestCase
         self::assertSame('49461.00', $rows[0]->amount->toDecimalString());
         self::assertTrue($rows[0]->leaf);
         self::assertFalse($rows[0]->hasChildren());
-        self::assertSame(2, $transport->calls[0]['arguments'][0]['r_what']);
-        self::assertSame(2, $transport->calls[0]['arguments'][0]['r_how']);
+        self::assertSame(2, $transport->mapArgument(0)['r_what']);
+        self::assertSame(2, $transport->mapArgument(0)['r_how']);
     }
 
     public function testClientExposesReportServiceWithClientTimezone(): void
@@ -86,7 +86,7 @@ final class ReportServiceTest extends TestCase
                 ->relativeTo(new \DateTimeImmutable('2026-07-13 22:30:00', new \DateTimeZone('UTC'))),
         );
 
-        self::assertSame('2026-07-14', $transport->calls[0]['arguments'][0]['relative_date']);
+        self::assertSame('2026-07-14', $transport->mapArgument(0)['relative_date']);
     }
 
     public function testRejectsUnknownReportCurrency(): void

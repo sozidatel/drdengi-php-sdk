@@ -57,6 +57,135 @@ final class FailoverTransportTest extends TestCase
         self::assertSame(['getBalance', 'getCurrencyList'], $fallback->methods());
     }
 
+    public function testUnavailableActiveFallbackWrapsAroundToPrimary(): void
+    {
+        $primary = new ScriptedTransport([
+            'getBalance' => new EndpointUnavailableException('primary unavailable'),
+            'getCurrencyList' => ['primary recovered'],
+            'getTagList' => ['primary remains active'],
+        ]);
+        $fallback = new ScriptedTransport([
+            'getBalance' => ['fallback selected'],
+            'getCurrencyList' => new EndpointUnavailableException('fallback unavailable'),
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        self::assertSame(['fallback selected'], $transport->call('getBalance'));
+        self::assertSame(['primary recovered'], $transport->call('getCurrencyList'));
+        self::assertSame(['primary remains active'], $transport->call('getTagList'));
+        self::assertSame(['getBalance', 'getCurrencyList', 'getTagList'], $primary->methods());
+        self::assertSame(['getBalance', 'getCurrencyList'], $fallback->methods());
+    }
+
+    public function testUnavailableActiveFallbackDoesNotRetryMutationOnPrimary(): void
+    {
+        $primary = new ScriptedTransport([
+            'getBalance' => new EndpointUnavailableException('primary unavailable'),
+            'getAccessStatus' => '1',
+            'setCategoryList' => [['server_id' => '10']],
+        ]);
+        $fallback = new ScriptedTransport([
+            'getBalance' => ['fallback selected'],
+            'setRecordList' => new EndpointUnavailableException('response was lost'),
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        self::assertSame(['fallback selected'], $transport->call('getBalance'));
+
+        try {
+            $transport->call('setRecordList', [[['client_id' => 123]]]);
+            self::fail('Expected ambiguous mutation failure.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertStringContainsString(Endpoint::ME_BASE_URI, $exception->getMessage());
+            self::assertStringContainsString('not retried', $exception->getMessage());
+        }
+
+        self::assertSame(
+            [['server_id' => '10']],
+            $transport->call('setCategoryList', [[['server_id' => '10', 'name' => 'Food']]]),
+        );
+        self::assertSame(['getBalance', 'getAccessStatus', 'setCategoryList'], $primary->methods());
+        self::assertSame(['getBalance', 'setRecordList'], $fallback->methods());
+    }
+
+    public function testAllFailedReadEndpointsClearStickySelectionBeforeMutation(): void
+    {
+        $primary = new ScriptedTransport([
+            'getBalance' => new EndpointUnavailableException('primary unavailable'),
+            'getCurrencyList' => new EndpointUnavailableException('primary still unavailable'),
+            'getAccessStatus' => '1',
+            'setCategoryList' => [['server_id' => '10']],
+        ]);
+        $fallback = new ScriptedTransport([
+            'getBalance' => ['fallback selected'],
+            'getCurrencyList' => new EndpointUnavailableException('fallback unavailable'),
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        self::assertSame(['fallback selected'], $transport->call('getBalance'));
+
+        try {
+            $transport->call('getCurrencyList');
+            self::fail('Expected all endpoints to be unavailable.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertStringContainsString('attempted', $exception->getMessage());
+        }
+
+        self::assertSame(
+            [['server_id' => '10']],
+            $transport->call('setCategoryList', [[['server_id' => '10', 'name' => 'Food']]]),
+        );
+        self::assertSame(
+            ['getBalance', 'getCurrencyList', 'getAccessStatus', 'setCategoryList'],
+            $primary->methods(),
+        );
+        self::assertSame(['getBalance', 'getCurrencyList'], $fallback->methods());
+    }
+
+    public function testInitialSyncRecordListIsNeverRetried(): void
+    {
+        $primary = new ScriptedTransport([
+            'getAccessStatus' => '1',
+            'getRecordList' => new EndpointUnavailableException('response was lost'),
+        ]);
+        $fallback = new ScriptedTransport([
+            'getRecordList' => [['id' => 'duplicate']],
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        try {
+            $transport->call('getRecordList', [['is_report' => false], []]);
+            self::fail('Expected ambiguous initial-sync failure.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertStringContainsString('not retried', $exception->getMessage());
+        } finally {
+            self::assertSame(['getAccessStatus', 'getRecordList'], $primary->methods());
+            self::assertSame([], $fallback->methods());
+        }
+    }
+
+    public function testRecordListWithUnknownArgumentsIsTreatedAsMutation(): void
+    {
+        $primary = new ScriptedTransport([
+            'getAccessStatus' => '1',
+            'getRecordList' => new EndpointUnavailableException('response was lost'),
+        ]);
+        $fallback = new ScriptedTransport([
+            'getRecordList' => [['id' => 'duplicate']],
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        try {
+            $transport->call('getRecordList');
+            self::fail('Expected conservative mutation failure.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertStringContainsString('not retried', $exception->getMessage());
+        } finally {
+            self::assertSame(['getAccessStatus', 'getRecordList'], $primary->methods());
+            self::assertSame([], $fallback->methods());
+        }
+    }
+
     public function testBusinessSoapFaultDoesNotTriggerFallback(): void
     {
         $fault = new TransportException('Invalid credentials');
@@ -83,7 +212,7 @@ final class FailoverTransportTest extends TestCase
 
         self::assertSame(
             [['id' => '42']],
-            $this->failover($primary, $fallback)->call('getRecordList', [[], []]),
+            $this->failover($primary, $fallback)->call('getRecordList', [['is_report' => true], []]),
         );
         self::assertSame(['getRecordList'], $primary->methods());
         self::assertSame(['getRecordList'], $fallback->methods());
@@ -238,6 +367,34 @@ final class FailoverTransportTest extends TestCase
         }
     }
 
+    public function testExplicitSoapOptionsOverrideAndExtendLegacyThirdArgument(): void
+    {
+        $client = DrebedengiClient::fromCredentials(
+            $this->credentials(),
+            Endpoint::RU_BASE_URI,
+            [
+                'connection_timeout' => 3,
+                'cache_wsdl' => WSDL_CACHE_DISK,
+            ],
+            [
+                'cache_wsdl' => WSDL_CACHE_MEMORY,
+                'user_agent' => 'Drebedengi SDK test',
+            ],
+        );
+        $transport = $this->clientTransport($client);
+        self::assertInstanceOf(SoapTransport::class, $transport);
+
+        $optionsProperty = new \ReflectionProperty(SoapTransport::class, 'soapOptions');
+        self::assertSame(
+            [
+                'connection_timeout' => 3,
+                'cache_wsdl' => WSDL_CACHE_MEMORY,
+                'user_agent' => 'Drebedengi SDK test',
+            ],
+            $optionsProperty->getValue($transport),
+        );
+    }
+
     public function testAllUnavailableExceptionContainsBothAttempts(): void
     {
         $transport = $this->failover(
@@ -272,23 +429,43 @@ final class FailoverTransportTest extends TestCase
     private function clientTransport(DrebedengiClient $client): TransportInterface
     {
         $property = new \ReflectionProperty($client, 'transport');
+        $transport = $property->getValue($client);
+        if (!$transport instanceof TransportInterface) {
+            throw new \LogicException('Client transport reflection returned an unexpected value.');
+        }
 
-        return $property->getValue($client);
+        return $transport;
     }
 
     private function soapEndpoint(SoapTransport $transport): Endpoint
     {
         $property = new \ReflectionProperty($transport, 'endpoint');
+        $endpoint = $property->getValue($transport);
+        if (!$endpoint instanceof Endpoint) {
+            throw new \LogicException('SOAP endpoint reflection returned an unexpected value.');
+        }
 
-        return $property->getValue($transport);
+        return $endpoint;
     }
 
     /** @return array<string, TransportInterface> */
     private function failoverTransports(FailoverTransport $transport): array
     {
         $property = new \ReflectionProperty($transport, 'transports');
+        $transports = $property->getValue($transport);
+        if (!is_array($transports)) {
+            throw new \LogicException('Failover transports reflection returned an unexpected value.');
+        }
 
-        return $property->getValue($transport);
+        $result = [];
+        foreach ($transports as $endpoint => $candidate) {
+            if (!is_string($endpoint) || !$candidate instanceof TransportInterface) {
+                throw new \LogicException('Failover transports reflection returned an invalid map.');
+            }
+            $result[$endpoint] = $candidate;
+        }
+
+        return $result;
     }
 }
 

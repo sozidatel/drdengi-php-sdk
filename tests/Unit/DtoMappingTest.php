@@ -67,6 +67,57 @@ final class DtoMappingTest extends TestCase
         self::assertFalse($excludedFromTotal->hidden);
     }
 
+    /**
+     * @param array<mixed>|\stdClass $invalidValue
+     */
+    #[DataProvider('nonScalarPlaceFieldProvider')]
+    public function testRejectsNonScalarPlaceFields(string $field, array|\stdClass $invalidValue): void
+    {
+        $raw = [
+            'id' => '10',
+            'name' => 'Cash',
+            'type' => '4',
+        ];
+        $raw[$field] = $invalidValue;
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('Expected Drebedengi SOAP scalar value');
+
+        Place::fromSoap($raw);
+    }
+
+    /** @return iterable<string, array{string, array<mixed>|\stdClass}> */
+    public static function nonScalarPlaceFieldProvider(): iterable
+    {
+        yield 'type' => ['type', ['4']];
+        yield 'parent ID' => ['parent_id', ['10']];
+        yield 'description' => ['description', new \stdClass()];
+    }
+
+    public function testRejectsNonScalarCategoryField(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('Expected Drebedengi SOAP scalar value');
+
+        Category::fromSoap([
+            'id' => '10',
+            'name' => 'Food',
+            'parent_id' => ['20'],
+        ]);
+    }
+
+    public function testPreservesNullPlaceDescription(): void
+    {
+        $place = Place::fromSoap([
+            'id' => '10',
+            'name' => 'Cash',
+            'type' => '4',
+            'description' => null,
+        ]);
+
+        self::assertNull($place->description);
+    }
+
     public function testMapsBalanceItemsExcludedFromTotal(): void
     {
         $balance = BalanceItem::fromSoap([
@@ -80,6 +131,59 @@ final class DtoMappingTest extends TestCase
 
         self::assertSame(Place::SYSTEM_PARENT_HIDDEN_AMOUNTS, $balance->parentId);
         self::assertTrue($balance->isExcludedFromTotal());
+    }
+
+    public function testPreservesNullableSoapTextFields(): void
+    {
+        $balance = BalanceItem::fromSoap([
+            'place_id' => '21',
+            'currency_id' => '1',
+            'sum' => '0',
+            'description' => null,
+        ]);
+        $currency = Currency::fromSoap([
+            'id' => '1',
+            'name' => 'EUR',
+            'ratio' => '1',
+            'course' => null,
+        ]);
+
+        self::assertNull($balance->description);
+        self::assertNull($currency->course);
+    }
+
+    public function testPreservesWhitespaceInSoapDisplayText(): void
+    {
+        $balance = BalanceItem::fromSoap([
+            'place_id' => '21',
+            'place_name' => '  Safe  ',
+            'currency_id' => '1',
+            'currency_name' => '  EUR  ',
+            'sum' => '0',
+            'description' => '  reserve  ',
+        ]);
+        $currency = Currency::fromSoap([
+            'id' => '1',
+            'name' => 'EUR',
+            'ratio' => '1',
+            'course' => '  1.23  ',
+        ]);
+        $record = Record::fromSoap([
+            'id' => '20',
+            'place_id' => '1',
+            'budget_object_id' => '2',
+            'sum' => '-1234',
+            'operation_date' => '2026-06-14 12:00:00',
+            'comment' => '  Lunch  ',
+            'currency_id' => '3',
+            'operation_type' => '3',
+        ]);
+
+        self::assertSame('  Safe  ', $balance->placeName);
+        self::assertSame('  EUR  ', $balance->currencyName);
+        self::assertSame('  reserve  ', $balance->description);
+        self::assertSame('  1.23  ', $currency->course);
+        self::assertSame('  Lunch  ', $record->comment);
     }
 
     public function testMapsRecordMinorUnitsAndType(): void
@@ -144,7 +248,24 @@ final class DtoMappingTest extends TestCase
         self::assertSame('598', $record->plannedRepeatId);
         self::assertSame('-2', $record->plannedPeriodId);
         self::assertSame('2026-07-10 13:59:00', $record->plannedInitialDate?->format('Y-m-d H:i:s'));
-        self::assertSame('Europe/Moscow', $record->plannedInitialDate?->getTimezone()->getName());
+        self::assertSame('Europe/Moscow', $record->plannedInitialDate->getTimezone()->getName());
+    }
+
+    public function testRejectsNonScalarPlannedInitialDate(): void
+    {
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('Expected Drebedengi SOAP scalar value');
+
+        Record::fromSoap([
+            'id' => '2248_598',
+            'budget_account_id' => '40032',
+            'budget_object_id' => '40029',
+            'difference' => '-120000',
+            'operation_date' => '2037-12-29 13:59:00',
+            'currency_id' => '17',
+            'operation_type' => 3,
+            'init_date' => ['2026-07-10 13:59:00'],
+        ]);
     }
 
     public function testMapsDetailReportTransferFieldsWithoutChangingRawPayload(): void

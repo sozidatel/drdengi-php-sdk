@@ -33,7 +33,7 @@ final readonly class MoneyAmount implements \JsonSerializable
             throw new InvalidArgumentException(sprintf('Invalid decimal money amount "%s".', $amount));
         }
 
-        $sign = ($matches[1] ?? '') === '-' ? -1 : 1;
+        $sign = $matches[1] === '-' ? -1 : 1;
         $major = (int)$matches[2];
         $fraction = $matches[3] ?? '';
         if (strlen($fraction) > $scale) {

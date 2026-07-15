@@ -46,7 +46,7 @@ final readonly class Place implements \JsonSerializable
             familyId: DrebedengiNormalizer::nullableId($raw['budget_family_id'] ?? $raw['family_id'] ?? null),
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),
             forDuty: DrebedengiNormalizer::bool($raw['is_for_duty'] ?? false),
-            description: array_key_exists('description', $raw) ? (string)$raw['description'] : null,
+            description: DrebedengiNormalizer::nullableText($raw['description'] ?? null),
             iconId: DrebedengiNormalizer::nullableId($raw['icon_id'] ?? null),
             sort: DrebedengiNormalizer::nullableId($raw['sort'] ?? null),
             purseOfUserId: DrebedengiNormalizer::nullableId($raw['purse_of_nuid'] ?? null),
@@ -77,16 +77,52 @@ final readonly class Place implements \JsonSerializable
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array{
+     *     id: string,
+     *     name: string,
+     *     type: PlaceType,
+     *     parentId: string|null,
+     *     systemParentId: string|null,
+     *     familyId: string|null,
+     *     hidden: bool,
+     *     forDuty: bool,
+     *     description: string|null,
+     *     iconId: string|null,
+     *     sort: string|null,
+     *     purseOfUserId: string|null,
+     *     autoHide: bool,
+     *     creditCard: bool,
+     *     raw: array<string, mixed>
+     * }
      */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'type' => $this->type,
+            'parentId' => $this->parentId,
+            'systemParentId' => $this->systemParentId,
+            'familyId' => $this->familyId,
+            'hidden' => $this->hidden,
+            'forDuty' => $this->forDuty,
+            'description' => $this->description,
+            'iconId' => $this->iconId,
+            'sort' => $this->sort,
+            'purseOfUserId' => $this->purseOfUserId,
+            'autoHide' => $this->autoHide,
+            'creditCard' => $this->creditCard,
+            'raw' => $this->raw,
+        ];
     }
 
     private static function normalParentId(mixed $value): ?string
     {
-        $value = trim((string)$value);
+        if ($value === null) {
+            return null;
+        }
+
+        $value = DrebedengiNormalizer::string($value);
         if ($value === '' || $value[0] === '-') {
             return null;
         }
@@ -96,7 +132,11 @@ final readonly class Place implements \JsonSerializable
 
     private static function systemParentId(mixed $value): ?string
     {
-        $value = trim((string)$value);
+        if ($value === null) {
+            return null;
+        }
+
+        $value = DrebedengiNormalizer::string($value);
         if ($value === '' || $value === '-1' || $value[0] !== '-') {
             return null;
         }

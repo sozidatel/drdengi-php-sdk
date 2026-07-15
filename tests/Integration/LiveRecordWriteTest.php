@@ -10,13 +10,30 @@ use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
 final class LiveRecordWriteTest extends TestCase
 {
+    private const FIXTURE_PREFIX = 'drdengi-php-sdk live ';
+
+    private ?DrebedengiClient $cleanupClient = null;
+
+    protected function tearDown(): void
+    {
+        try {
+            if ($this->cleanupClient !== null) {
+                $this->removeSdkFixtures($this->cleanupClient);
+            }
+        } finally {
+            $this->cleanupClient = null;
+            parent::tearDown();
+        }
+    }
+
     public function testCanCreateReadAndDeleteExpense(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = $this->writeClientOrSkip();
 
         $place = $client->places()->accounts()[0] ?? null;
         $category = $client->categories()->list()[0] ?? null;
@@ -66,7 +83,7 @@ final class LiveRecordWriteTest extends TestCase
 
     public function testCanCreateReadAndDeleteIncomeTransferAndExchange(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = $this->writeClientOrSkip();
 
         $places = $client->places()->accounts();
         $placeA = $places[0] ?? null;
@@ -141,7 +158,7 @@ final class LiveRecordWriteTest extends TestCase
 
     public function testExpenseCategoryCannotBeDeletedWhileExpenseUsesIt(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = $this->writeClientOrSkip();
 
         $place = $client->places()->accounts()[0] ?? null;
         $currency = $client->currencies()->list()[0] ?? null;
@@ -209,9 +226,39 @@ final class LiveRecordWriteTest extends TestCase
         }
     }
 
+    public function testCanUpdateAndRestoreCategory(): void
+    {
+        $client = $this->writeClientOrSkip();
+
+        $categoryId = null;
+        $originalName = 'drdengi-php-sdk live update ' . bin2hex(random_bytes(4));
+        $updatedName = $originalName . ' renamed';
+        try {
+            $categoryId = $this->createCategory($client, $originalName);
+
+            $client->categories()->update($categoryId, ['name' => $updatedName]);
+            $updated = $client->categories()->byIds([$categoryId])[0] ?? null;
+            self::assertNotNull($updated);
+            self::assertSame($updatedName, $updated->name);
+
+            $client->categories()->update($categoryId, ['name' => $originalName]);
+            $restored = $client->categories()->byIds([$categoryId])[0] ?? null;
+            self::assertNotNull($restored);
+            self::assertSame($originalName, $restored->name);
+        } finally {
+            if ($categoryId !== null) {
+                try {
+                    $client->categories()->delete($categoryId);
+                } catch (\Throwable) {
+                    // Keep cleanup best-effort so the original assertion is not hidden.
+                }
+            }
+        }
+    }
+
     public function testDeletingParentCategoryAlsoDeletesChildCategory(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = $this->writeClientOrSkip();
 
         $parentId = null;
         $childId = null;
@@ -250,7 +297,7 @@ final class LiveRecordWriteTest extends TestCase
 
     public function testCanCreateReadAndDeleteExpenseGroup(): void
     {
-        $client = LiveClientFactory::clientOrSkip($this);
+        $client = $this->writeClientOrSkip();
 
         $place = $client->places()->accounts()[0] ?? null;
         $currency = $client->currencies()->list()[0] ?? null;
@@ -325,8 +372,8 @@ final class LiveRecordWriteTest extends TestCase
         $ids = [];
         foreach ($created as $item) {
             foreach (['server_id', 'id'] as $field) {
-                if (array_key_exists($field, $item) && trim((string)$item[$field]) !== '') {
-                    $ids[] = (string)$item[$field];
+                if (array_key_exists($field, $item)) {
+                    $ids[] = DrebedengiNormalizer::requiredString($item, $field, 'write');
                     break;
                 }
             }
@@ -378,5 +425,66 @@ final class LiveRecordWriteTest extends TestCase
         }
 
         return null;
+    }
+
+    private function writeClientOrSkip(): DrebedengiClient
+    {
+        $client = LiveClientFactory::writeClientOrSkip($this);
+        $this->cleanupClient = $client;
+        $this->removeSdkFixtures($client);
+
+        return $client;
+    }
+
+    private function removeSdkFixtures(DrebedengiClient $client): void
+    {
+        // Two passes make cleanup resilient to paired transfer/exchange deletion,
+        // parent-category cascades and a transient failed delete response.
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            foreach ($this->sdkFixtureRecords($client) as $record) {
+                try {
+                    $client->records()->delete($record->id, $record->operationType);
+                } catch (\Throwable) {
+                    // Read-back below decides whether the object is actually left behind.
+                }
+            }
+
+            foreach ($this->sdkFixtureCategories($client) as $category) {
+                try {
+                    $client->categories()->delete($category->id);
+                } catch (\Throwable) {
+                    // Read-back below decides whether the object is actually left behind.
+                }
+            }
+        }
+
+        self::assertSame(
+            [],
+            array_map(static fn ($record): string => $record->id, $this->sdkFixtureRecords($client)),
+            'Live write tests left Drebedengi record fixtures behind.',
+        );
+        self::assertSame(
+            [],
+            array_map(static fn ($category): string => $category->id, $this->sdkFixtureCategories($client)),
+            'Live write tests left Drebedengi category fixtures behind.',
+        );
+    }
+
+    /** @return list<\Soz\Drebedengi\Model\Record> */
+    private function sdkFixtureRecords(DrebedengiClient $client): array
+    {
+        return array_values(array_filter(
+            $client->records()->list((new RecordQuery())->allTime()),
+            static fn ($record): bool => str_starts_with($record->comment, self::FIXTURE_PREFIX),
+        ));
+    }
+
+    /** @return list<\Soz\Drebedengi\Model\Category> */
+    private function sdkFixtureCategories(DrebedengiClient $client): array
+    {
+        return array_values(array_filter(
+            $client->categories()->list(),
+            static fn ($category): bool => str_starts_with($category->name, self::FIXTURE_PREFIX),
+        ));
     }
 }

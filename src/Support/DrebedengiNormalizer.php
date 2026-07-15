@@ -14,20 +14,68 @@ final class DrebedengiNormalizer
         if (is_bool($value)) {
             return $value;
         }
+        if (is_int($value)) {
+            return match ($value) {
+                1 => true,
+                0 => false,
+                default => throw new UnexpectedResponseException(
+                    'Expected Drebedengi SOAP boolean token 0 or 1.',
+                ),
+            };
+        }
+        if (!is_string($value)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Expected Drebedengi SOAP boolean token, got %s.',
+                get_debug_type($value),
+            ));
+        }
 
-        return in_array(strtolower(trim((string)$value)), ['1', 'true', 't', 'yes', 'y'], true);
+        return match (strtolower(trim($value))) {
+            '1', 'true', 't', 'yes', 'y' => true,
+            '0', 'false', 'f', 'no', 'n', '' => false,
+            default => throw new UnexpectedResponseException(sprintf(
+                'Unexpected Drebedengi SOAP boolean token "%s".',
+                $value,
+            )),
+        };
     }
 
     public static function nullableId(mixed $value): ?string
     {
-        $value = trim((string)$value);
+        if ($value === null) {
+            return null;
+        }
+
+        $value = self::string($value);
 
         return $value === '' || $value === '-1' ? null : $value;
     }
 
+    public static function nullableString(mixed $value): ?string
+    {
+        return $value === null ? null : self::string($value);
+    }
+
     public static function string(mixed $value): string
     {
-        return trim((string)$value);
+        return trim(self::text($value));
+    }
+
+    public static function nullableText(mixed $value): ?string
+    {
+        return $value === null ? null : self::text($value);
+    }
+
+    public static function text(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Expected Drebedengi SOAP scalar value, got %s.',
+                get_debug_type($value),
+            ));
+        }
+
+        return (string)$value;
     }
 
     /** @param array<string, mixed> $raw */
@@ -99,7 +147,19 @@ final class DrebedengiNormalizer
                 ));
             }
 
-            $result[] = $item;
+            $normalizedItem = [];
+            foreach ($item as $field => $fieldValue) {
+                if (!is_string($field)) {
+                    throw new UnexpectedResponseException(sprintf(
+                        'Expected Drebedengi SOAP list item at key "%s" to use string field names.',
+                        (string)$key,
+                    ));
+                }
+
+                $normalizedItem[$field] = $fieldValue;
+            }
+
+            $result[] = $normalizedItem;
         }
 
         return $result;

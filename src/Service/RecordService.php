@@ -20,6 +20,7 @@ use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
 use Soz\Drebedengi\Transport\TransportInterface;
 
+/** @phpstan-import-type SoapParams from RecordQuery */
 final readonly class RecordService
 {
     private CurrencyCatalog $currencies;
@@ -40,7 +41,7 @@ final readonly class RecordService
         $query ??= new RecordQuery();
         $params = $query->toSoapParams($this->options->timezone);
 
-        if ((string)$params['r_currency'] !== '0') {
+        if ($params['r_currency'] !== 0 && $params['r_currency'] !== '0') {
             throw new InvalidArgumentException(
                 'RecordService only supports records in their original currency. '
                 . 'Use ReportQuery for converted financial amounts.',
@@ -296,7 +297,24 @@ final readonly class RecordService
             OperationType::All => throw new InvalidArgumentException('Cannot delete a record with OperationType::All.'),
         };
 
-        return (int)$this->transport->call('deleteObject', [(int)$id, $deleteType->value]) === 1;
+        $response = $this->transport->call('deleteObject', [$id, $deleteType->value]);
+        if (!is_int($response) && !is_string($response)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Drebedengi record delete response must be an integer, got %s.',
+                get_debug_type($response),
+            ));
+        }
+
+        $status = DrebedengiNormalizer::requiredInteger(
+            ['result' => $response],
+            'result',
+            'record delete',
+        );
+        if ($status !== 0 && $status !== 1) {
+            throw new UnexpectedResponseException('Drebedengi record delete response must be 0 or 1.');
+        }
+
+        return $status === 1;
     }
 
     /**
@@ -318,9 +336,9 @@ final readonly class RecordService
     }
 
     /**
-     * @param list<Record> $records
+     * @param non-empty-list<Record> $records
      * @param list<array<string, mixed>> $queriedRows
-     * @param array<string, mixed> $params
+     * @param SoapParams $params
      * @return list<Record>
      */
     private function addBalanceAfter(array $records, array $queriedRows, array $params): array
@@ -382,14 +400,18 @@ final readonly class RecordService
     }
 
     /**
-     * @param list<Record> $records
-     * @param array<string, mixed> $params
+     * @param non-empty-list<Record> $records
+     * @param SoapParams $params
      * @return array{string, string}
      */
     private function balanceDateRange(array $records, array $params): array
     {
-        if ((int)$params['r_period'] === 0) {
-            return [(string)$params['period_from'], (string)$params['period_to']];
+        if ($params['r_period'] === 0) {
+            if (!isset($params['period_from'], $params['period_to'])) {
+                throw new \LogicException('Custom record query must contain period_from and period_to.');
+            }
+
+            return [$params['period_from'], $params['period_to']];
         }
 
         $dates = array_map(
@@ -401,17 +423,17 @@ final readonly class RecordService
     }
 
     /**
-     * @param array<string, mixed> $params
+     * @param SoapParams $params
      */
     private function canReuseRowsForBalance(array $params): bool
     {
-        return (int)$params['r_period'] === 0
-            && (int)$params['r_what'] === OperationType::All->value
-            && (int)$params['r_who'] === 0
-            && (string)$params['r_currency'] === '0'
-            && (int)$params['r_is_place'] === 0
-            && (int)$params['r_is_tag'] === 0
-            && (int)$params['r_is_category'] === 0;
+        return $params['r_period'] === 0
+            && $params['r_what'] === OperationType::All->value
+            && $params['r_who'] === 0
+            && ($params['r_currency'] === 0 || $params['r_currency'] === '0')
+            && $params['r_is_place'] === 0
+            && $params['r_is_tag'] === 0
+            && $params['r_is_category'] === 0;
     }
 
     /**
@@ -440,27 +462,37 @@ final readonly class RecordService
         ];
     }
 
-    /**
-     * @param ExpenseGroupItem|array{categoryId: int|string, amount: MoneyAmount, comment?: string} $item
-     */
-    private function normalizeExpenseGroupItem(ExpenseGroupItem|array $item): ExpenseGroupItem
+    private function normalizeExpenseGroupItem(mixed $item): ExpenseGroupItem
     {
         if ($item instanceof ExpenseGroupItem) {
             return $item;
+        }
+
+        if (!is_array($item)) {
+            throw new InvalidArgumentException('Expense group item must be an array or ExpenseGroupItem.');
         }
 
         if (!array_key_exists('categoryId', $item) || !array_key_exists('amount', $item)) {
             throw new InvalidArgumentException('Expense group item must contain categoryId and amount.');
         }
 
+        if (!is_int($item['categoryId']) && !is_string($item['categoryId'])) {
+            throw new InvalidArgumentException('Expense group item categoryId must be an integer or string.');
+        }
+
         if (!$item['amount'] instanceof MoneyAmount) {
             throw new InvalidArgumentException('Expense group item amount must be an instance of MoneyAmount.');
+        }
+
+        $comment = $item['comment'] ?? '';
+        if (!is_string($comment)) {
+            throw new InvalidArgumentException('Expense group item comment must be a string.');
         }
 
         return new ExpenseGroupItem(
             categoryId: $item['categoryId'],
             amount: $item['amount'],
-            comment: (string)($item['comment'] ?? ''),
+            comment: $comment,
         );
     }
 
@@ -518,6 +550,6 @@ final readonly class RecordService
      */
     private function normalizeIds(array $ids): array
     {
-        return array_values(array_map(static fn (int|string $id): string => (string)$id, $ids));
+        return array_map(static fn (int|string $id): string => (string)$id, $ids);
     }
 }

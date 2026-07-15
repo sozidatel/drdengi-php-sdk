@@ -115,8 +115,8 @@ final class SoapTransportTest extends TestCase
         );
 
         $method = new \ReflectionMethod($transport, 'clientOptions');
-        /** @var array<string, mixed> $options */
         $options = $method->invoke($transport);
+        self::assertIsArray($options);
 
         self::assertTrue($options['exceptions']);
         self::assertSame($endpoint->soapLocation(), $options['location']);
@@ -146,6 +146,7 @@ final class ThrowingSoapClient extends SoapClient
     {
     }
 
+    /** @param list<mixed> $args */
     public function __call(string $name, array $args): mixed
     {
         throw $this->fault;

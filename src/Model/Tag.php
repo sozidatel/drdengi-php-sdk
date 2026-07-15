@@ -40,8 +40,29 @@ final readonly class Tag implements \JsonSerializable
         );
     }
 
+    /**
+     * @return array{
+     *     id: string,
+     *     name: string,
+     *     parentId: string|null,
+     *     familyId: string|null,
+     *     hidden: bool,
+     *     family: bool,
+     *     sort: string|null,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'parentId' => $this->parentId,
+            'familyId' => $this->familyId,
+            'hidden' => $this->hidden,
+            'family' => $this->family,
+            'sort' => $this->sort,
+            'raw' => $this->raw,
+        ];
     }
 }

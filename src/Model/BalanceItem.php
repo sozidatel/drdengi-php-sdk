@@ -45,14 +45,16 @@ final readonly class BalanceItem implements \JsonSerializable
 
         return new self(
             placeId: $placeId,
-            placeName: (string)($raw['place_name'] ?? ''),
+            placeName: DrebedengiNormalizer::text($raw['place_name'] ?? ''),
             currencyId: $currencyId,
-            currencyName: (string)($raw['currency_name'] ?? ''),
+            currencyName: DrebedengiNormalizer::text($raw['currency_name'] ?? ''),
             sum: $currency?->amountFromMinorUnits($sum) ?? MoneyAmount::fromMinorUnits($sum),
             parentId: DrebedengiNormalizer::nullableId($raw['parent_id'] ?? null),
             forDuty: DrebedengiNormalizer::bool($raw['is_for_duty'] ?? false),
             creditCard: DrebedengiNormalizer::bool($raw['is_credit_card'] ?? false),
-            description: array_key_exists('description', $raw) ? (string)$raw['description'] : null,
+            description: array_key_exists('description', $raw)
+                ? DrebedengiNormalizer::nullableText($raw['description'])
+                : null,
             raw: $raw,
         );
     }
@@ -62,8 +64,33 @@ final readonly class BalanceItem implements \JsonSerializable
         return $this->parentId === Place::SYSTEM_PARENT_HIDDEN_AMOUNTS;
     }
 
+    /**
+     * @return array{
+     *     placeId: string,
+     *     placeName: string,
+     *     currencyId: string,
+     *     currencyName: string,
+     *     sum: MoneyAmount,
+     *     parentId: string|null,
+     *     forDuty: bool,
+     *     creditCard: bool,
+     *     description: string|null,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'placeId' => $this->placeId,
+            'placeName' => $this->placeName,
+            'currencyId' => $this->currencyId,
+            'currencyName' => $this->currencyName,
+            'sum' => $this->sum,
+            'parentId' => $this->parentId,
+            'forDuty' => $this->forDuty,
+            'creditCard' => $this->creditCard,
+            'description' => $this->description,
+            'raw' => $this->raw,
+        ];
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
@@ -37,7 +38,7 @@ final class RecordServiceTest extends TestCase
         self::assertSame([['server_id' => '10']], $result);
         self::assertSame('setRecordList', $transport->calls[0]['method']);
 
-        $payload = $transport->calls[0]['arguments'][0][0];
+        $payload = $transport->mapListArgument(0)[0];
         self::assertArrayHasKey('client_id', $payload);
         self::assertSame('1', $payload['place_id']);
         self::assertSame('2', $payload['budget_object_id']);
@@ -62,7 +63,7 @@ final class RecordServiceTest extends TestCase
             comment: 'SDK transfer',
         );
 
-        $payloads = $transport->calls[0]['arguments'][0];
+        $payloads = $transport->mapListArgument(0);
         self::assertCount(2, $payloads);
         self::assertSame(-500, $payloads[0]['sum']);
         self::assertSame(500, $payloads[1]['sum']);
@@ -108,6 +109,35 @@ final class RecordServiceTest extends TestCase
         }
     }
 
+    public function testDeleteUsesValidatedSoapResult(): void
+    {
+        $transport = new FakeTransport(['deleteObject' => '1']);
+
+        self::assertTrue($this->service($transport)->delete('10', OperationType::Expense));
+        self::assertSame([10, 'waste'], $transport->calls[0]['arguments']);
+    }
+
+    #[DataProvider('malformedDeleteResponseProvider')]
+    public function testDeleteRejectsMalformedSoapResult(mixed $response, string $message): void
+    {
+        $service = $this->service(new FakeTransport(['deleteObject' => $response]));
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage($message);
+
+        $service->delete('10', OperationType::Expense);
+    }
+
+    /** @return iterable<string, array{mixed, string}> */
+    public static function malformedDeleteResponseProvider(): iterable
+    {
+        yield 'array' => [['unexpected'], 'must be an integer, got array'];
+        yield 'non-integer string' => ['broken', 'non-integer field "result"'];
+        yield 'unknown integer status' => [2, 'must be 0 or 1'];
+        yield 'boolean' => [true, 'must be an integer, got bool'];
+        yield 'float' => [1.0, 'must be an integer, got float'];
+    }
+
     public function testCreateExchangeRejectsSameCurrency(): void
     {
         $service = new RecordService(new FakeTransport());
@@ -142,7 +172,7 @@ final class RecordServiceTest extends TestCase
             comment: 'SDK test',
         );
 
-        $payload = $transport->calls[0]['arguments'][0][0];
+        $payload = $transport->mapListArgument(0)[0];
         self::assertSame('2026-06-14 12:00:00', $payload['operation_date']);
     }
 
@@ -177,7 +207,7 @@ final class RecordServiceTest extends TestCase
         self::assertSame([['server_id' => '10']], $result);
         self::assertCount(1, $transport->calls);
 
-        $payload = $transport->calls[0]['arguments'][0][0];
+        $payload = $transport->mapListArgument(0)[0];
         self::assertSame('2', $payload['budget_object_id']);
         self::assertSame(-1234, $payload['sum']);
         self::assertSame('Coffee', $payload['comment']);
@@ -207,7 +237,7 @@ final class RecordServiceTest extends TestCase
         self::assertSame([['server_id' => '100'], ['server_id' => '101']], $result);
         self::assertCount(1, $transport->calls);
 
-        $groupedPayloads = $transport->calls[0]['arguments'][0];
+        $groupedPayloads = $transport->mapListArgument(0);
         self::assertCount(2, $groupedPayloads);
 
         self::assertArrayHasKey('client_id', $groupedPayloads[0]);
@@ -228,20 +258,46 @@ final class RecordServiceTest extends TestCase
         self::assertSame(3, $groupedPayloads[1]['operation_type']);
     }
 
-    public function testCreateExpenseGroupValidatesArrayItems(): void
+    /** @param array<string, mixed> $item */
+    #[DataProvider('malformedExpenseGroupItemProvider')]
+    public function testCreateExpenseGroupValidatesArrayItems(array $item, string $message): void
     {
         $service = new RecordService(new FakeTransport());
 
         $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
 
-        $service->createExpenseGroup(
-            placeId: '1',
-            items: [
-                ['categoryId' => '10', 'amount' => '12.34'],
-            ],
-            currencyId: '3',
-            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+        // Cross the documented item-shape boundary to verify defensive runtime validation.
+        (new \ReflectionMethod($service, 'createExpenseGroup'))->invoke(
+            $service,
+            '1',
+            [$item],
+            '3',
+            new \DateTimeImmutable('2026-06-14 12:00:00'),
         );
+    }
+
+    /**
+     * @return iterable<string, array{array<string, mixed>, string}>
+     */
+    public static function malformedExpenseGroupItemProvider(): iterable
+    {
+        yield 'missing amount' => [
+            ['categoryId' => '10'],
+            'must contain categoryId and amount',
+        ];
+        yield 'invalid category ID' => [
+            ['categoryId' => ['10'], 'amount' => MoneyAmount::fromDecimalString('12.34')],
+            'categoryId must be an integer or string',
+        ];
+        yield 'invalid amount' => [
+            ['categoryId' => '10', 'amount' => '12.34'],
+            'amount must be an instance of MoneyAmount',
+        ];
+        yield 'invalid comment' => [
+            ['categoryId' => '10', 'amount' => MoneyAmount::fromDecimalString('12.34'), 'comment' => 42],
+            'comment must be a string',
+        ];
     }
 
     public function testRecordQueryFormatsDateRangeInAccountTimezone(): void
@@ -257,7 +313,7 @@ final class RecordServiceTest extends TestCase
             new \DateTimeImmutable('2026-06-14 22:30:00', new \DateTimeZone('UTC')),
         ));
 
-        $params = $transport->calls[0]['arguments'][0];
+        $params = $transport->mapArgument(0);
         self::assertTrue($params['is_report']);
         self::assertSame('2026-06-14', $params['period_from']);
         self::assertSame('2026-06-15', $params['period_to']);
@@ -274,8 +330,8 @@ final class RecordServiceTest extends TestCase
         $service->list(new RecordQuery());
 
         self::assertCount(2, $transport->calls);
-        self::assertSame(8, $transport->calls[0]['arguments'][0]['r_period']);
-        self::assertSame($transport->calls[0]['arguments'][0], $transport->calls[1]['arguments'][0]);
+        self::assertSame(8, $transport->mapArgument(0)['r_period']);
+        self::assertSame($transport->mapArgument(0), $transport->mapArgument(1));
     }
 
     public function testReadsRecordsByIdsWithExplicitSafeMode(): void
@@ -285,7 +341,7 @@ final class RecordServiceTest extends TestCase
 
         $service->byIds(['10', 20]);
 
-        self::assertSame(['is_report' => true], $transport->calls[0]['arguments'][0]);
+        self::assertSame(['is_report' => true], $transport->mapArgument(0));
         self::assertSame(['10', '20'], $transport->calls[0]['arguments'][1]);
     }
 
@@ -351,13 +407,13 @@ final class RecordServiceTest extends TestCase
         );
 
         self::assertSame(300, $records[0]->balanceAfter?->minorUnits);
-        self::assertSame(2, $records[0]->balanceAfter?->scale);
-        self::assertSame('3', $records[0]->balanceAfter?->currencyId);
+        self::assertSame(2, $records[0]->balanceAfter->scale);
+        self::assertSame('3', $records[0]->balanceAfter->currencyId);
         self::assertSame(['getRecordList', 'getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
-        self::assertTrue($transport->calls[0]['arguments'][0]['is_report']);
-        self::assertTrue($transport->calls[1]['arguments'][0]['is_report']);
-        self::assertSame(0, $transport->calls[1]['arguments'][0]['r_is_category']);
-        self::assertSame('2026-01-02', $transport->calls[2]['arguments'][0]['restDate']);
+        self::assertTrue($transport->mapArgument(0)['is_report']);
+        self::assertTrue($transport->mapArgument(1)['is_report']);
+        self::assertSame(0, $transport->mapArgument(1)['r_is_category']);
+        self::assertSame('2026-01-02', $transport->mapArgument(2)['restDate']);
     }
 
     public function testReusesUnfilteredDateRangeRowsForBalanceCalculation(): void
@@ -390,7 +446,7 @@ final class RecordServiceTest extends TestCase
 
         self::assertSame(500, $records[0]->balanceAfter?->minorUnits);
         self::assertSame(['getRecordList', 'getBalance'], array_column($transport->calls, 'method'));
-        self::assertTrue($transport->calls[0]['arguments'][0]['is_report']);
+        self::assertTrue($transport->mapArgument(0)['is_report']);
     }
 
     public function testBalanceAfterRejectsBalanceWithoutSum(): void
@@ -627,7 +683,7 @@ final class RecordServiceTest extends TestCase
             date: new \DateTimeImmutable('2026-07-14 12:00:00'),
         );
 
-        self::assertSame(-1234, $transport->calls[0]['arguments'][0][0]['sum']);
+        self::assertSame(-1234, $transport->mapListArgument(0)[0]['sum']);
     }
 
     public function testRejectsAmountBoundToAnotherCurrencyBeforeWrite(): void

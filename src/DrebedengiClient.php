@@ -35,7 +35,9 @@ final class DrebedengiClient
 
     /**
      * @param Endpoint|string|list<Endpoint|string>|null $endpoint
+     * @param ClientOptions|array<string, mixed>|null $options
      * @param array<string, mixed> $soapOptions
+     * @phpstan-param Endpoint|string|list<mixed>|null $endpoint
      */
     public static function fromCredentials(
         Credentials $credentials,
@@ -44,7 +46,9 @@ final class DrebedengiClient
         array $soapOptions = [],
     ): self {
         if (is_array($options)) {
-            $soapOptions = $options;
+            // Keep the legacy third-argument form compatible, while allowing
+            // an explicitly supplied fourth argument to override its values.
+            $soapOptions = array_replace($options, $soapOptions);
             $options = null;
         }
 
@@ -64,6 +68,7 @@ final class DrebedengiClient
     /**
      * @param Endpoint|string|list<Endpoint|string>|null $endpoint
      * @return non-empty-list<Endpoint>
+     * @phpstan-param Endpoint|string|list<mixed>|null $endpoint
      */
     private static function normalizeEndpoints(Endpoint|string|array|null $endpoint): array
     {
@@ -87,6 +92,10 @@ final class DrebedengiClient
             }
 
             throw new InvalidArgumentException('Drebedengi endpoints must be Endpoint objects or base URI strings.');
+        }
+
+        if ($endpoints === []) {
+            throw new InvalidArgumentException('At least one valid Drebedengi endpoint must be configured.');
         }
 
         return $endpoints;

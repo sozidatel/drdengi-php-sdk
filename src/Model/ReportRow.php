@@ -55,7 +55,7 @@ final readonly class ReportRow implements \JsonSerializable
 
         $parentId = DrebedengiNormalizer::requiredString($raw, 'parent_id', 'report row');
         $noChildren = DrebedengiNormalizer::requiredString($raw, 'nochild', 'report row');
-        $nickname = trim((string)($raw['nick'] ?? ''));
+        $nickname = DrebedengiNormalizer::string($raw['nick'] ?? '');
 
         return new self(
             objectId: DrebedengiNormalizer::requiredString($raw, 'budget_object_id', 'report row'),
@@ -74,8 +74,29 @@ final readonly class ReportRow implements \JsonSerializable
         return !$this->leaf;
     }
 
+    /**
+     * @return array{
+     *     objectId: string,
+     *     name: string,
+     *     parentId: string|null,
+     *     amount: DecimalMoneyAmount,
+     *     currencyId: string,
+     *     leaf: bool,
+     *     nickname: string|null,
+     *     raw: array<string, mixed>
+     * }
+     */
     public function jsonSerialize(): array
     {
-        return get_object_vars($this);
+        return [
+            'objectId' => $this->objectId,
+            'name' => $this->name,
+            'parentId' => $this->parentId,
+            'amount' => $this->amount,
+            'currencyId' => $this->currencyId,
+            'leaf' => $this->leaf,
+            'nickname' => $this->nickname,
+            'raw' => $this->raw,
+        ];
     }
 }

@@ -32,13 +32,13 @@ final class RecordQueryTest extends TestCase
         self::assertSame(true, $params['is_report']);
         self::assertSame(true, $params['is_show_duty']);
         self::assertSame(0, $params['r_period']);
-        self::assertSame('2026-01-01', $params['period_from']);
-        self::assertSame('2026-01-31', $params['period_to']);
+        self::assertSame('2026-01-01', $params['period_from'] ?? null);
+        self::assertSame('2026-01-31', $params['period_to'] ?? null);
         self::assertSame(6, $params['r_what']);
         self::assertSame(0, $params['r_who']);
         self::assertSame(0, $params['r_currency']);
         self::assertSame(1, $params['r_is_place']);
-        self::assertSame(['11416426'], $params['r_place']);
+        self::assertSame(['11416426'], $params['r_place'] ?? null);
     }
 
     public function testCanFilterByCategory(): void
@@ -53,7 +53,7 @@ final class RecordQueryTest extends TestCase
 
         self::assertSame(OperationType::Expense->value, $params['r_what']);
         self::assertSame(1, $params['r_is_category']);
-        self::assertSame(['10', '20'], $params['r_category']);
+        self::assertSame(['10', '20'], $params['r_category'] ?? null);
     }
 
     public function testRejectsCategoryFilterForAllOperationTypesBeforeSoapCall(): void
@@ -95,7 +95,18 @@ final class RecordQueryTest extends TestCase
     {
         $query = new RecordQuery();
 
-        $params = $query->{$method}()->toSoapParams();
+        $query = match ($method) {
+            'today' => $query->today(),
+            'thisMonth' => $query->thisMonth(),
+            'lastMonth' => $query->lastMonth(),
+            'thisQuarter' => $query->thisQuarter(),
+            'thisYear' => $query->thisYear(),
+            'lastYear' => $query->lastYear(),
+            'allTime' => $query->allTime(),
+            'last20' => $query->last20(),
+            default => throw new \LogicException(sprintf('Unknown named period "%s".', $method)),
+        };
+        $params = $query->toSoapParams();
 
         self::assertSame($period, $params['r_period']);
         self::assertArrayNotHasKey('period_from', $params);
@@ -124,7 +135,7 @@ final class RecordQueryTest extends TestCase
             ->relativeTo(new \DateTimeImmutable('2026-07-13 22:30:00', new \DateTimeZone('UTC')))
             ->toSoapParams(new \DateTimeZone('Europe/Podgorica'));
 
-        self::assertSame('2026-07-14', $params['relative_date']);
+        self::assertSame('2026-07-14', $params['relative_date'] ?? null);
     }
 
     public function testSupportsPlannedDebtsUserAndAllFilterDirections(): void
@@ -144,11 +155,11 @@ final class RecordQueryTest extends TestCase
         self::assertFalse($params['is_show_duty']);
         self::assertSame(42, $params['r_who']);
         self::assertSame(2, $params['r_is_place']);
-        self::assertSame(['10', '20'], $params['r_place']);
+        self::assertSame(['10', '20'], $params['r_place'] ?? null);
         self::assertSame(1, $params['r_is_tag']);
-        self::assertSame(['30', '40'], $params['r_tag']);
+        self::assertSame(['30', '40'], $params['r_tag'] ?? null);
         self::assertSame(2, $params['r_is_category']);
-        self::assertSame(['50', '60'], $params['r_category']);
+        self::assertSame(['50', '60'], $params['r_category'] ?? null);
     }
 
     public function testSupportsExceptTagsAndOnlyCategories(): void
@@ -161,9 +172,9 @@ final class RecordQueryTest extends TestCase
             ->toSoapParams();
 
         self::assertSame(2, $params['r_is_tag']);
-        self::assertSame(['30'], $params['r_tag']);
+        self::assertSame(['30'], $params['r_tag'] ?? null);
         self::assertSame(1, $params['r_is_category']);
-        self::assertSame(['50'], $params['r_category']);
+        self::assertSame(['50'], $params['r_category'] ?? null);
     }
 
     public function testCanResetUserAndBooleanOptions(): void
