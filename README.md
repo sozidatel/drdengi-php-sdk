@@ -29,6 +29,7 @@ use Soz\Drebedengi\Credentials;
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Endpoint;
+use Soz\Drebedengi\WsdlCache;
 
 $credentials = new Credentials(
     apiId: getenv('DREB_API_ID'),
@@ -38,7 +39,12 @@ $credentials = new Credentials(
 
 $client = DrebedengiClient::fromCredentials(
     $credentials,
-    options: new ClientOptions(new DateTimeZone('Europe/Podgorica')),
+    options: new ClientOptions(
+        timezone: new DateTimeZone('Europe/Podgorica'),
+        connectTimeout: 10,
+        readTimeout: 30.0,
+        wsdlCache: WsdlCache::Memory,
+    ),
 );
 ```
 
@@ -64,12 +70,21 @@ $client = DrebedengiClient::fromCredentials(
 );
 ```
 
-Первый ответивший endpoint запоминается на время жизни клиента. Read-only вызов можно повторить на следующем endpoint после инфраструктурного сбоя. Перед первой операцией записи SDK выбирает endpoint безопасным `getAccessStatus`, а саму запись отправляет только один раз: неоднозначный сбой после отправки не приводит к автоматическому повтору. Credentials передаются каждому endpoint из явно заданного списка, поэтому добавляйте только доверенные серверы.
+Успешно ответивший endpoint становится активным, пока инфраструктурный сбой не
+заставит SDK выбрать другой. Read-only вызов можно повторить на следующем
+endpoint. Если до первой операции записи endpoint ещё не выбран чтением, SDK
+сначала выполняет безопасный `getAccessStatus`. Саму запись он отправляет только
+один раз: неоднозначный сбой после отправки приводит к
+`AmbiguousMutationException` и не вызывает автоматический повтор. Credentials
+передаются каждому endpoint из явно заданного списка, поэтому добавляйте только
+доверенные серверы.
 
 SDK переопределяет SOAP `location`, потому что официальный WSDL может указывать другой адрес сервиса.
 Параметры `location` и `exceptions` зарезервированы транспортом: переданные через `soapOptions`
 значения для них игнорируются, чтобы credentials не ушли на другой endpoint, а `SoapFault`
-всегда проходил через классификацию исключений SDK. Остальные SOAP options остаются настраиваемыми.
+всегда проходил через классификацию исключений SDK. Остальные SOAP options остаются настраиваемыми
+и имеют приоритет над соответствующими полями `ClientOptions`. Передача `null` в
+`connectTimeout` или `readTimeout` отключает типизированное значение.
 
 Дребеденьги передают даты операций как `YYYY-MM-DD HH:MM:SS` без timezone. SDK не нашел timezone в SOAP-методах аккаунта, поэтому timezone аккаунта нужно задавать явно через `ClientOptions`. Если не задать, будет использована `date_default_timezone_get()`.
 
@@ -172,8 +187,8 @@ patch обязательными legacy-полями. Ограниченный �
 patch и попытки обновить папки, credit-card либо системные долговые счета
 отклоняются до `setCategoryList` / `setPlaceList`. Полный `raw`-payload из старого
 кода также принимается: server-managed поля безопасно игнорируются.
-Метод возвращает проверенный сырой ответ записи — тот же формат, что и методы
-создания операций.
+Метод возвращает проверенный сырой SOAP-ответ. В отличие от методов создания
+операций, справочные update-методы в 0.6 ещё не оборачивают его в `WriteResult`.
 
 Источники доходов поддерживают тот же интерфейс:
 
@@ -290,10 +305,11 @@ foreach ($expenses as $row) {
 
 ```php
 use Soz\Drebedengi\Model\ExpenseGroupItem;
+use Soz\Drebedengi\Model\RecordWriteToken;
 
 $currency = $client->currencies()->require('CURRENCY_ID');
 
-$client->records()->createExpense(
+$result = $client->records()->createExpense(
     placeId: 'PLACE_ID',
     categoryId: 'CATEGORY_ID',
     amount: $currency->amount('12.34'),
@@ -301,6 +317,9 @@ $client->records()->createExpense(
     date: new DateTimeImmutable(),
     comment: 'Обед',
 );
+
+$recordId = $result->firstServerId();
+$rawResponse = $result->raw;
 
 $client->records()->createIncome(
     placeId: 'PLACE_ID',
@@ -337,6 +356,39 @@ $client->records()->createExpenseGroup(
 
 Для нескольких строк SDK отправляет один `setRecordList` с общим `group_id`, который связывает все позиции чека в одну группу.
 
+Все методы `records()->create*()` возвращают `WriteResult`: в нём доступны `serverIds`,
+`clientIds`, `firstServerId()`, `serverIdForClientId()` и исходные строки
+`raw`. Объект также поддерживает `count()`, `foreach` и чтение `$result[0]`.
+Низкоуровневый `savePayloads()` сохранён для кода, которому нужен именно сырой
+SOAP-массив.
+
+Если ответ на запись потерян, заранее созданный токен позволяет немедленно
+повторить тот же payload с тем же `client_id`:
+
+```php
+$writeToken = RecordWriteToken::generate();
+$operationDate = new DateTimeImmutable();
+
+$result = $client->records()->createExpense(
+    placeId: 'PLACE_ID',
+    categoryId: 'CATEGORY_ID',
+    amount: $currency->amount('12.34'),
+    currencyId: $currency->id,
+    date: $operationDate,
+    comment: 'Обед',
+    writeToken: $writeToken,
+);
+```
+
+Токен фиксирует только идентификаторы: при повторе нужно передать совершенно те
+же аргументы, включая тот же `$operationDate`, суммы и комментарий.
+Legacy-дедупликация ограничена: следующий успешный `setRecordList` для того же
+API ID заменяет сохранённые соответствия. Повторяй запрос до другой записи и до
+`sync()->initialRecords()`. При failover нельзя повторять вызов на том же
+failover-клиенте: создай клиент с одним endpoint из
+`AmbiguousMutationException::$endpoint` либо сначала сверь результат чтением.
+Автоматического повтора mutations SDK не делает.
+
 `Currency::amount()` — рекомендуемый способ создавать суммы: он сам применяет точность из
 `ratio` и связывает `MoneyAmount` с ID валюты. Валюту можно найти без ручного перебора:
 
@@ -354,9 +406,11 @@ $amount = $btc->amount('0.00001234');
 дубль можно будет убрать в пользу обязательной currency-bound суммы.
 
 При чтении через `records()` и `balance()` суммы уже имеют правильный `scale` и связанный
-`currencyId`; вручную применять `withScale()` больше не нужно. Каталог валют лениво кэшируется
-в пределах экземпляра `DrebedengiClient`; для принудительного обновления есть
-`$client->currencies()->refresh()`.
+`currencyId`. `withScale()` и `fromFloat()` объявлены устаревшими. Для точного
+изменения scale с сохранением суммы используй `rescale()`; намеренная
+переинтерпретация тех же minor units называется `reinterpretScale()`. Каталог
+валют лениво кэшируется в пределах экземпляра `DrebedengiClient`; для
+принудительного обновления есть `$client->currencies()->refresh()`.
 
 `createTransfer()` и `createExchange()` сами создают парные записи и связывают их через `client_move_id` / `client_change_id`.
 Перевод на тот же самый счёт SDK отклоняет до SOAP-вызова.
@@ -364,14 +418,50 @@ $amount = $btc->amount('0.00001234');
 ## Обновление и удаление
 
 ```php
+use Soz\Drebedengi\Model\RecordPatch;
+
 $record = $client->records()->byIds(['RECORD_ID'])[0];
-$client->records()->update($record);
+$result = $client->records()->update($record, new RecordPatch(
+    amount: $currency->amount('25.00'),
+    comment: 'Исправленный комментарий',
+));
 
 $client->records()->delete('RECORD_ID', $record->operationType);
 ```
 
+`RecordPatch` поддерживает `placeId`, `budgetObjectId`, `amount`,
+`operationDate`, `comment`, `currencyId` и `duty`. Сумма трактуется как
+абсолютная, а тип расхода или дохода определяет её направление. Исходный
+`Record` остаётся неизменным. Перемещения и обмены состоят из двух связанных
+строк; одиночный `update()` отклоняет их до SOAP-вызова, чтобы не отправлять
+неполную пару. При смене `currencyId` одновременно передай `amount`, созданный
+через новую `Currency`; иначе currency-bound сумма исходной операции не пройдёт
+проверку согласованности.
+
 DTO сохраняют исходный SOAP-массив в поле `raw`, чтобы можно было разбирать неизвестные legacy-поля без потери данных.
 Методы `delete()` принимают только положительные целочисленные server ID и проверяют их до SOAP-вызова.
+
+## Обработка ошибок
+
+```php
+use Soz\Drebedengi\Exception\AmbiguousMutationException;
+use Soz\Drebedengi\Exception\EndpointUnavailableException;
+use Soz\Drebedengi\Exception\SoapFaultException;
+
+try {
+    $client->records()->createExpense(/* ... */);
+} catch (AmbiguousMutationException $exception) {
+    // Запись могла сохраниться. Не повторяй её с новым client_id.
+} catch (EndpointUnavailableException $exception) {
+    // retrySafe=true означает, что повтор не создаст дубль.
+} catch (SoapFaultException $exception) {
+    // Сервер ответил business/API fault.
+}
+```
+
+У транспортных исключений доступны свойства `method`, `endpoint`,
+`retrySafe` и `faultCode`. `AmbiguousMutationException` наследует
+`EndpointUnavailableException`, поэтому ставь более узкий catch первым.
 
 ## Синхронизация по revision
 

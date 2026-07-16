@@ -1,5 +1,94 @@
 # Обновление SDK
 
+## С 0.5.1 на 0.6.0
+
+Релиз улучшает записывающий и транспортный API. Основное несовместимое
+изменение: методы создания и обновления операций теперь возвращают объект
+`WriteResult`, а не PHP-массив.
+
+```php
+$result = $client->records()->createExpense(/* ... */);
+
+$serverId = $result->firstServerId();
+$serverIds = $result->serverIds;
+$rawRows = $result->raw;
+```
+
+`WriteResult` поддерживает `foreach`, `count()` и чтение `$result[0]`, поэтому
+простой перебор прежнего результата продолжает работать. Код с параметром или
+return type `array`, `is_array()`, `empty()`, boolean-проверкой результата,
+array-функциями или записью в offset нужно перевести на `$result->raw`.
+`json_encode($result)` теперь выдаёт типизированный объект с ID и `raw`, а не
+только прежний список; для прежней JSON-формы также кодируй `$result->raw`.
+Низкоуровневый `records()->savePayloads()` по-прежнему возвращает сырой список.
+
+Для изменения отдельных полей операции используй `RecordPatch`:
+
+```php
+$record = $client->records()->byIds([$id])[0];
+
+$client->records()->update($record, new RecordPatch(
+    amount: $currency->amount('25.00'),
+    comment: 'Исправленный комментарий',
+));
+```
+
+Одиночный `update()` поддерживает расходы и доходы. Перемещения и обмены
+состоят из двух связанных строк, а legacy `setRecordList` требует обе половины
+в одной пачке, поэтому SDK теперь отклоняет их до SOAP-вызова.
+
+Для контролируемого повтора можно заранее создать `RecordWriteToken` и передать
+его в тот же `create*()` повторно. Это не вечный idempotency key: сервер хранит
+только соответствия последнего успешного `setRecordList` для данного API ID.
+Токен сохраняет только ID, поэтому все остальные аргументы, включая дату,
+суммы и комментарий, тоже должны быть теми же. Запрос нужно повторять сразу, до
+другой успешной записи и до `sync()->initialRecords()`. При failover не
+используй прежний failover-клиент: повтор допустим только через клиент,
+закреплённый за endpoint из `AmbiguousMutationException`.
+
+Транспортные ошибки стали структурированными:
+
+- `SoapFaultException` означает, что сервер ответил валидным SOAP fault;
+- `EndpointUnavailableException` с `retrySafe=true` означает, что тот же вызов
+  можно повторить без риска дублирования записи;
+- `AmbiguousMutationException` наследует `EndpointUnavailableException`, но
+  всегда имеет `retrySafe=false`: запрос мог быть применён сервером.
+
+У всех транспортных исключений доступны `method`, `endpoint`, `retrySafe` и
+`faultCode`. Исходный `SoapFault` намеренно не сохраняется в `previous`, потому
+что его trace может содержать credentials.
+
+`ClientOptions` получил явные значения по умолчанию:
+
+```php
+new ClientOptions(
+    timezone: new DateTimeZone('Europe/Podgorica'),
+    connectTimeout: 10,
+    readTimeout: 30.0,
+    wsdlCache: WsdlCache::Memory,
+);
+```
+
+Передай `null` вместо timeout, чтобы не добавлять соответствующую настройку
+SOAP. Legacy/raw `soapOptions` остаются совместимыми и имеют приоритет над
+типизированными значениями.
+
+Чтобы максимально воспроизвести транспортные defaults 0.5.1:
+
+```php
+new ClientOptions(
+    timezone: $timezone,
+    connectTimeout: null,
+    readTimeout: null,
+    wsdlCache: WsdlCache::None,
+);
+```
+
+`MoneyAmount::fromFloat()` и `MoneyAmount::withScale()` объявлены устаревшими.
+Используй decimal string / `Currency::amount()`, `rescale()` для сохранения
+денежного значения либо `reinterpretScale()` для намеренного изменения смысла
+minor units. Переполнение теперь приводит к `InvalidArgumentException`.
+
 ## С 0.5.0 на 0.5.1
 
 Обновление обратно совместимо для корректных ответов API и корректных входных

@@ -9,8 +9,10 @@ use Soz\Drebedengi\Exception\TransportException;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\OperationType;
+use Soz\Drebedengi\Model\RecordPatch;
 use Soz\Drebedengi\Model\RecordQuery;
-use Soz\Drebedengi\Support\DrebedengiNormalizer;
+use Soz\Drebedengi\Model\RecordWriteToken;
+use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Tests\Support\LiveClientFactory;
 
 final class LiveRecordWriteTest extends TestCase
@@ -78,6 +80,114 @@ final class LiveRecordWriteTest extends TestCase
             self::assertSame($comment, $records[0]->comment);
         } finally {
             $client->records()->delete($serverId, OperationType::Expense);
+        }
+    }
+
+    public function testCanUpdateExpenseWithRecordPatch(): void
+    {
+        $client = $this->writeClientOrSkip();
+
+        $place = $client->places()->accounts()[0] ?? null;
+        $category = $client->categories()->list()[0] ?? null;
+        $currency = $client->currencies()->list()[0] ?? null;
+        if (!$place || !$category || !$currency) {
+            self::markTestSkipped('Live Drebedengi account does not have place/category/currency fixtures.');
+        }
+
+        $recordId = null;
+        $comment = 'drdengi-php-sdk live patch ' . bin2hex(random_bytes(4));
+        $updatedComment = $comment . ' updated';
+        try {
+            $created = $client->records()->createExpense(
+                placeId: $place->id,
+                categoryId: $category->id,
+                amount: $currency->amount('1.23'),
+                currencyId: $currency->id,
+                date: new \DateTimeImmutable('now'),
+                comment: $comment,
+            );
+            $recordId = $this->requireCreatedId($created, $client, $comment);
+            $record = $client->records()->byIds([$recordId])[0] ?? null;
+            self::assertNotNull($record);
+
+            $result = $client->records()->update($record, new RecordPatch(
+                amount: $currency->amount('2.34'),
+                comment: $updatedComment,
+            ));
+
+            self::assertSame($recordId, $result->firstServerId());
+            $updated = $client->records()->byIds([$recordId])[0] ?? null;
+            self::assertNotNull($updated);
+            self::assertSame($updatedComment, $updated->comment);
+            self::assertSame('-2.34', $updated->sum->toDecimalString());
+        } finally {
+            if ($recordId !== null) {
+                try {
+                    $client->records()->delete($recordId, OperationType::Expense);
+                } catch (\Throwable) {
+                    // tearDown performs a second cleanup pass by fixture prefix.
+                }
+            }
+        }
+    }
+
+    public function testRepeatedCreateWithSameWriteTokenDoesNotDuplicateExpense(): void
+    {
+        $client = $this->writeClientOrSkip();
+
+        $place = $client->places()->accounts()[0] ?? null;
+        $category = $client->categories()->list()[0] ?? null;
+        $currency = $client->currencies()->list()[0] ?? null;
+        if (!$place || !$category || !$currency) {
+            self::markTestSkipped('Live Drebedengi account does not have place/category/currency fixtures.');
+        }
+
+        $recordId = null;
+        $comment = 'drdengi-php-sdk live idempotency ' . bin2hex(random_bytes(4));
+        $date = new \DateTimeImmutable('now');
+        $writeToken = RecordWriteToken::generate();
+        try {
+            $first = $client->records()->createExpense(
+                placeId: $place->id,
+                categoryId: $category->id,
+                amount: $currency->amount('1.23'),
+                currencyId: $currency->id,
+                date: $date,
+                comment: $comment,
+                writeToken: $writeToken,
+            );
+            $recordId = $this->requireCreatedId($first, $client, $comment);
+            self::assertSame(
+                $recordId,
+                $first->serverIdForClientId($writeToken->clientId()),
+            );
+
+            $second = $client->records()->createExpense(
+                placeId: $place->id,
+                categoryId: $category->id,
+                amount: $currency->amount('1.23'),
+                currencyId: $currency->id,
+                date: $date,
+                comment: $comment,
+                writeToken: $writeToken,
+            );
+            $secondId = $this->requireCreatedId($second, $client, $comment);
+
+            self::assertSame($recordId, $secondId);
+            $matching = array_values(array_filter(
+                $client->records()->list((new RecordQuery())->allTime()),
+                static fn ($record): bool => $record->comment === $comment,
+            ));
+            self::assertCount(1, $matching);
+            self::assertSame($recordId, $matching[0]->id);
+        } finally {
+            if ($recordId !== null) {
+                try {
+                    $client->records()->delete($recordId, OperationType::Expense);
+                } catch (\Throwable) {
+                    // tearDown performs a second cleanup pass by fixture prefix.
+                }
+            }
         }
     }
 
@@ -355,37 +465,20 @@ final class LiveRecordWriteTest extends TestCase
         }
     }
 
-    /**
-     * @param list<array<string, mixed>> $created
-     */
-    private function extractServerId(array $created): ?string
+    private function extractServerId(WriteResult $created): ?string
     {
-        return $this->extractServerIds($created)[0] ?? null;
+        return $created->firstServerId();
     }
 
     /**
-     * @param list<array<string, mixed>> $created
      * @return list<string>
      */
-    private function extractServerIds(array $created): array
+    private function extractServerIds(WriteResult $created): array
     {
-        $ids = [];
-        foreach ($created as $item) {
-            foreach (['server_id', 'id'] as $field) {
-                if (array_key_exists($field, $item)) {
-                    $ids[] = DrebedengiNormalizer::requiredString($item, $field, 'write');
-                    break;
-                }
-            }
-        }
-
-        return $ids;
+        return $created->serverIds;
     }
 
-    /**
-     * @param list<array<string, mixed>> $created
-     */
-    private function requireCreatedId(array $created, DrebedengiClient $client, string $comment): string
+    private function requireCreatedId(WriteResult $created, DrebedengiClient $client, string $comment): string
     {
         $serverId = $this->extractServerId($created);
         if ($serverId !== null) {

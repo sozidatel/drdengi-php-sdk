@@ -6,6 +6,49 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-16
+
+### Добавлено
+
+- `RecordPatch` для частичного обновления операций без ручной реконструкции
+  большого `Record`.
+- Типизированный `WriteResult` с server/client ID, исходным SOAP-ответом и
+  совместимыми `foreach`, `count()` и array-access операциями чтения.
+- `RecordWriteToken` для контролируемого немедленного повтора записи с теми же
+  `client_id`, а для группы расходов — и `group_id`.
+- Структурированные `SoapFaultException` и `AmbiguousMutationException`;
+  транспортные исключения теперь содержат `method`, `endpoint`, `retrySafe` и
+  `faultCode`.
+- Типизированные transport options: connect/read timeout и `WsdlCache`.
+
+### Изменено
+
+- `records()->create*()` и `records()->update()` теперь возвращают
+  `WriteResult`. Низкоуровневый `savePayloads()` по-прежнему возвращает сырой
+  список.
+- `records()->update()` явно отклоняет перемещения и обмены: legacy API требует
+  обе связанные строки, а одиночный `Record` не содержит безопасного полного
+  patch-контракта для пары.
+- По умолчанию SOAP использует connect timeout 10 секунд, read timeout 30
+  секунд и WSDL memory cache. Raw `soapOptions` остаются escape hatch и имеют
+  приоритет над типизированными настройками.
+- Failover и одиночный endpoint одинаково различают безопасный повтор до
+  отправки и неоднозначный результат уже отправленной записи.
+
+### Исправлено
+
+- `MoneyAmount` больше не переполняет integer незаметно при больших значениях и
+  корректно форматирует `PHP_INT_MIN`.
+- `absolute()` и `negate()` явно отклоняют единственное непредставимое
+  положительное значение, а `fromFloat()` проверяет finite/range.
+
+### Устарело
+
+- `MoneyAmount::fromFloat()` из-за недетерминированной двоичной точности.
+- `MoneyAmount::withScale()`, который меняет смысл minor units. Для сохранения
+  суммы используй `rescale()`, для явной переинтерпретации —
+  `reinterpretScale()`.
+
 ## [0.5.1] - 2026-07-15
 
 ### Добавлено
@@ -53,6 +96,7 @@
 - Чтение истории отделено от state-changing первоначальной синхронизации.
 - Ответы финансовых и справочных методов валидируются на границе SOAP.
 
-[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/sozidatel/drdengi-php-sdk/releases/tag/v0.5.0

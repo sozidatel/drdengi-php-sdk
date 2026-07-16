@@ -6,14 +6,17 @@ namespace Soz\Drebedengi\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Credentials;
+use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\DrebedengiClient;
 use Soz\Drebedengi\Endpoint;
+use Soz\Drebedengi\Exception\AmbiguousMutationException;
 use Soz\Drebedengi\Exception\EndpointUnavailableException;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\TransportException;
 use Soz\Drebedengi\Transport\FailoverTransport;
 use Soz\Drebedengi\Transport\SoapTransport;
 use Soz\Drebedengi\Transport\TransportInterface;
+use Soz\Drebedengi\WsdlCache;
 
 final class FailoverTransportTest extends TestCase
 {
@@ -95,9 +98,12 @@ final class FailoverTransportTest extends TestCase
         try {
             $transport->call('setRecordList', [[['client_id' => 123]]]);
             self::fail('Expected ambiguous mutation failure.');
-        } catch (EndpointUnavailableException $exception) {
+        } catch (AmbiguousMutationException $exception) {
             self::assertStringContainsString(Endpoint::ME_BASE_URI, $exception->getMessage());
             self::assertStringContainsString('not retried', $exception->getMessage());
+            self::assertSame('setRecordList', $exception->method);
+            self::assertSame(Endpoint::ME_BASE_URI, $exception->endpoint);
+            self::assertFalse($exception->retrySafe);
         }
 
         self::assertSame(
@@ -156,8 +162,10 @@ final class FailoverTransportTest extends TestCase
         try {
             $transport->call('getRecordList', [['is_report' => false], []]);
             self::fail('Expected ambiguous initial-sync failure.');
-        } catch (EndpointUnavailableException $exception) {
+        } catch (AmbiguousMutationException $exception) {
             self::assertStringContainsString('not retried', $exception->getMessage());
+            self::assertSame('getRecordList', $exception->method);
+            self::assertFalse($exception->retrySafe);
         } finally {
             self::assertSame(['getAccessStatus', 'getRecordList'], $primary->methods());
             self::assertSame([], $fallback->methods());
@@ -178,8 +186,10 @@ final class FailoverTransportTest extends TestCase
         try {
             $transport->call('getRecordList');
             self::fail('Expected conservative mutation failure.');
-        } catch (EndpointUnavailableException $exception) {
+        } catch (AmbiguousMutationException $exception) {
             self::assertStringContainsString('not retried', $exception->getMessage());
+            self::assertSame('getRecordList', $exception->method);
+            self::assertFalse($exception->retrySafe);
         } finally {
             self::assertSame(['getAccessStatus', 'getRecordList'], $primary->methods());
             self::assertSame([], $fallback->methods());
@@ -218,6 +228,21 @@ final class FailoverTransportTest extends TestCase
         self::assertSame(['getRecordList'], $fallback->methods());
     }
 
+    public function testKnownRawAccumReadCanBeRetriedOnFallback(): void
+    {
+        $primary = new ScriptedTransport([
+            'getAccumList' => new EndpointUnavailableException('response unavailable'),
+        ]);
+        $fallback = new ScriptedTransport(['getAccumList' => [['id' => '42']]]);
+
+        self::assertSame(
+            [['id' => '42']],
+            $this->failover($primary, $fallback)->call('getAccumList', [[]]),
+        );
+        self::assertSame(['getAccumList'], $primary->methods());
+        self::assertSame(['getAccumList'], $fallback->methods());
+    }
+
     public function testMutationIsNotRetriedAfterAmbiguousInfrastructureFailure(): void
     {
         $primary = new ScriptedTransport([
@@ -233,14 +258,72 @@ final class FailoverTransportTest extends TestCase
         try {
             $transport->call('setRecordList', [[['client_id' => 123]]]);
             self::fail('Expected ambiguous mutation failure.');
-        } catch (EndpointUnavailableException $exception) {
+        } catch (AmbiguousMutationException $exception) {
             self::assertStringContainsString('setRecordList', $exception->getMessage());
             self::assertStringContainsString(Endpoint::DEFAULT_BASE_URI, $exception->getMessage());
             self::assertStringContainsString('not retried', $exception->getMessage());
+            self::assertSame('setRecordList', $exception->method);
+            self::assertSame(Endpoint::DEFAULT_BASE_URI, $exception->endpoint);
+            self::assertFalse($exception->retrySafe);
         } finally {
             self::assertSame(['getAccessStatus', 'setRecordList'], $primary->methods());
             self::assertSame([], $fallback->methods());
         }
+    }
+
+    public function testMutationFailureKnownToBePreSendIsNotReportedAsAmbiguous(): void
+    {
+        $primary = new ScriptedTransport([
+            'getAccessStatus' => 1,
+            'setRecordList' => new EndpointUnavailableException(
+                message: 'connection failed before send',
+                method: 'setRecordList',
+                endpoint: Endpoint::RU_BASE_URI,
+                retrySafe: true,
+                faultCode: 'WSDL',
+            ),
+        ]);
+        $fallback = new ScriptedTransport();
+        $transport = $this->failover($primary, $fallback);
+
+        try {
+            $transport->call('setRecordList', [[['client_id' => 123]]]);
+            self::fail('Expected retry-safe endpoint failure.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertNotInstanceOf(AmbiguousMutationException::class, $exception);
+            self::assertSame('setRecordList', $exception->method);
+            self::assertSame(Endpoint::RU_BASE_URI, $exception->endpoint);
+            self::assertTrue($exception->retrySafe);
+            self::assertSame('WSDL', $exception->faultCode);
+            self::assertStringContainsString('may be retried', $exception->getMessage());
+        }
+
+        self::assertSame(['getAccessStatus', 'setRecordList'], $primary->methods());
+        self::assertSame([], $fallback->methods());
+    }
+
+    public function testMutationEndpointProbeFailureIsRetrySafeAndUsesRequestedMethod(): void
+    {
+        $primary = new ScriptedTransport([
+            'getAccessStatus' => new EndpointUnavailableException('primary unavailable'),
+        ]);
+        $fallback = new ScriptedTransport([
+            'getAccessStatus' => new EndpointUnavailableException('fallback unavailable'),
+        ]);
+        $transport = $this->failover($primary, $fallback);
+
+        try {
+            $transport->call('setRecordList', [[['client_id' => 123]]]);
+            self::fail('Expected endpoint selection failure.');
+        } catch (EndpointUnavailableException $exception) {
+            self::assertNotInstanceOf(AmbiguousMutationException::class, $exception);
+            self::assertSame('setRecordList', $exception->method);
+            self::assertSame(Endpoint::ME_BASE_URI, $exception->endpoint);
+            self::assertTrue($exception->retrySafe);
+        }
+
+        self::assertSame(['getAccessStatus'], $primary->methods());
+        self::assertSame(['getAccessStatus'], $fallback->methods());
     }
 
     public function testFirstMutationSelectsEndpointWithReadOnlyProbe(): void
@@ -395,6 +478,27 @@ final class FailoverTransportTest extends TestCase
         );
     }
 
+    public function testTypedTransportOptionsArePropagatedToEveryFailoverEndpoint(): void
+    {
+        $options = new ClientOptions(
+            connectTimeout: 8,
+            readTimeout: 24.5,
+            wsdlCache: WsdlCache::Both,
+        );
+        $client = DrebedengiClient::fromCredentials(
+            $this->credentials(),
+            [Endpoint::RU_BASE_URI, Endpoint::ME_BASE_URI],
+            $options,
+        );
+        $failover = $this->clientTransport($client);
+        self::assertInstanceOf(FailoverTransport::class, $failover);
+
+        $optionsProperty = new \ReflectionProperty(SoapTransport::class, 'options');
+        foreach ($this->failoverTransports($failover) as $transport) {
+            self::assertSame($options, $optionsProperty->getValue($transport));
+        }
+    }
+
     public function testAllUnavailableExceptionContainsBothAttempts(): void
     {
         $transport = $this->failover(
@@ -408,6 +512,9 @@ final class FailoverTransportTest extends TestCase
         } catch (EndpointUnavailableException $exception) {
             self::assertStringContainsString(Endpoint::RU_BASE_URI, $exception->getMessage());
             self::assertStringContainsString(Endpoint::ME_BASE_URI, $exception->getMessage());
+            self::assertSame('getBalance', $exception->method);
+            self::assertSame(Endpoint::ME_BASE_URI, $exception->endpoint);
+            self::assertTrue($exception->retrySafe);
         }
     }
 

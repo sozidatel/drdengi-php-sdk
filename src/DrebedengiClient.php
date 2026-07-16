@@ -52,17 +52,23 @@ final class DrebedengiClient
             $options = null;
         }
 
+        $options ??= new ClientOptions();
         $endpoints = self::normalizeEndpoints($endpoint);
         $transports = [];
         foreach ($endpoints as $candidate) {
-            $transports[$candidate->baseUri()] = new SoapTransport($credentials, $candidate, $soapOptions);
+            $transports[$candidate->baseUri()] = new SoapTransport(
+                $credentials,
+                $candidate,
+                $soapOptions,
+                $options,
+            );
         }
 
         $transport = count($transports) === 1
             ? array_values($transports)[0]
             : new FailoverTransport($transports);
 
-        return new self($transport, $options ?? new ClientOptions());
+        return new self($transport, $options);
     }
 
     /**

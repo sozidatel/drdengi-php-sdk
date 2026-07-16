@@ -14,7 +14,10 @@ use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\Record;
+use Soz\Drebedengi\Model\RecordPatch;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Model\RecordWriteToken;
+use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Support\DrebedengiDateTime;
@@ -81,9 +84,6 @@ final readonly class RecordService
         ));
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
     public function createExpense(
         int|string $placeId,
         int|string $categoryId,
@@ -91,27 +91,39 @@ final readonly class RecordService
         int|string $currencyId,
         \DateTimeInterface $date,
         string $comment = '',
-    ): array {
-        return $this->savePayloads([
-            $this->expensePayload($placeId, $categoryId, $amount, $currencyId, $date, $comment),
+        ?RecordWriteToken $writeToken = null,
+    ): WriteResult {
+        $writeToken = $this->writeToken($writeToken, 1, 'Creating an expense');
+
+        return $this->writePayloads([
+            $this->expensePayload(
+                $placeId,
+                $categoryId,
+                $amount,
+                $currencyId,
+                $date,
+                $comment,
+                $writeToken->clientId(),
+            ),
         ]);
     }
 
     /**
      * @param list<ExpenseGroupItem|array{categoryId: int|string, amount: MoneyAmount, comment?: string}> $items
-     * @return list<array<string, mixed>>
      */
     public function createExpenseGroup(
         int|string $placeId,
         array $items,
         int|string $currencyId,
         \DateTimeInterface $date,
-    ): array {
+        ?RecordWriteToken $writeToken = null,
+    ): WriteResult {
         $items = array_map($this->normalizeExpenseGroupItem(...), $items);
         if ($items === []) {
-            return [];
+            return WriteResult::empty();
         }
 
+        $writeToken = $this->writeToken($writeToken, count($items), 'Creating an expense group');
         if (count($items) === 1) {
             $item = $items[0];
 
@@ -122,24 +134,29 @@ final readonly class RecordService
                 currencyId: $currencyId,
                 date: $date,
                 comment: $item->comment,
+                writeToken: $writeToken,
             );
         }
 
-        $groupId = (string)$this->clientId();
         $payloads = [];
-        foreach ($items as $item) {
-            $payload = $this->expensePayload($placeId, $item->categoryId, $item->amount, $currencyId, $date, $item->comment);
-            $payload['group_id'] = $groupId;
+        foreach ($items as $index => $item) {
+            $payload = $this->expensePayload(
+                $placeId,
+                $item->categoryId,
+                $item->amount,
+                $currencyId,
+                $date,
+                $item->comment,
+                $writeToken->clientId($index),
+            );
+            $payload['group_id'] = (string)$writeToken->groupId;
 
             $payloads[] = $payload;
         }
 
-        return $this->savePayloads($payloads);
+        return $this->writePayloads($payloads);
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
     public function createIncome(
         int|string $placeId,
         int|string $sourceId,
@@ -147,14 +164,17 @@ final readonly class RecordService
         int|string $currencyId,
         \DateTimeInterface $date,
         string $comment = '',
-    ): array {
+        ?RecordWriteToken $writeToken = null,
+    ): WriteResult {
         $this->assertAmountMatchesCurrency($amount, $currencyId);
+        $writeToken = $this->writeToken($writeToken, 1, 'Creating an income');
+        $minorUnits = $amount->absolute()->minorUnits;
 
-        return $this->savePayloads([[
-            'client_id' => $this->clientId(),
+        return $this->writePayloads([[
+            'client_id' => $writeToken->clientId(),
             'place_id' => (string)$placeId,
             'budget_object_id' => (string)$sourceId,
-            'sum' => abs($amount->minorUnits),
+            'sum' => $minorUnits,
             'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
             'comment' => $comment,
             'currency_id' => (string)$currencyId,
@@ -163,9 +183,6 @@ final readonly class RecordService
         ]]);
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
     public function createTransfer(
         int|string $fromPlaceId,
         int|string $toPlaceId,
@@ -173,7 +190,8 @@ final readonly class RecordService
         int|string $currencyId,
         \DateTimeInterface $date,
         string $comment = '',
-    ): array {
+        ?RecordWriteToken $writeToken = null,
+    ): WriteResult {
         $fromPlaceId = DrebedengiNormalizer::positiveIntegerId($fromPlaceId, 'Transfer source place ID');
         $toPlaceId = DrebedengiNormalizer::positiveIntegerId($toPlaceId, 'Transfer destination place ID');
         if ($fromPlaceId === $toPlaceId) {
@@ -181,20 +199,19 @@ final readonly class RecordService
         }
 
         $this->assertAmountMatchesCurrency($amount, $currencyId);
+        $minorUnits = $amount->absolute()->minorUnits;
 
-        $fromClientId = $this->clientId();
-        $toClientId = $this->clientId();
-        if ($fromClientId === $toClientId) {
-            $toClientId++;
-        }
+        $writeToken = $this->writeToken($writeToken, 2, 'Creating a transfer');
+        $fromClientId = $writeToken->clientId(0);
+        $toClientId = $writeToken->clientId(1);
 
-        return $this->savePayloads([
+        return $this->writePayloads([
             [
                 'client_id' => $fromClientId,
                 'client_move_id' => $toClientId,
                 'place_id' => (string)$fromPlaceId,
                 'budget_object_id' => (string)$toPlaceId,
-                'sum' => -abs($amount->minorUnits),
+                'sum' => -$minorUnits,
                 'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
                 'comment' => $comment,
                 'currency_id' => (string)$currencyId,
@@ -206,7 +223,7 @@ final readonly class RecordService
                 'client_move_id' => $fromClientId,
                 'place_id' => (string)$toPlaceId,
                 'budget_object_id' => (string)$fromPlaceId,
-                'sum' => abs($amount->minorUnits),
+                'sum' => $minorUnits,
                 'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
                 'comment' => $comment,
                 'currency_id' => (string)$currencyId,
@@ -216,9 +233,6 @@ final readonly class RecordService
         ]);
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
     public function createExchange(
         int|string $placeId,
         MoneyAmount $soldAmount,
@@ -227,27 +241,28 @@ final readonly class RecordService
         int|string $boughtCurrencyId,
         \DateTimeInterface $date,
         string $comment = '',
-    ): array {
+        ?RecordWriteToken $writeToken = null,
+    ): WriteResult {
         if ((string)$soldCurrencyId === (string)$boughtCurrencyId) {
             throw new InvalidArgumentException('Currency exchange requires two different currency ids.');
         }
 
         $this->assertAmountMatchesCurrency($soldAmount, $soldCurrencyId);
         $this->assertAmountMatchesCurrency($boughtAmount, $boughtCurrencyId);
+        $soldMinorUnits = $soldAmount->absolute()->minorUnits;
+        $boughtMinorUnits = $boughtAmount->absolute()->minorUnits;
 
-        $soldClientId = $this->clientId();
-        $boughtClientId = $this->clientId();
-        if ($soldClientId === $boughtClientId) {
-            $boughtClientId++;
-        }
+        $writeToken = $this->writeToken($writeToken, 2, 'Creating a currency exchange');
+        $soldClientId = $writeToken->clientId(0);
+        $boughtClientId = $writeToken->clientId(1);
 
-        return $this->savePayloads([
+        return $this->writePayloads([
             [
                 'client_id' => $soldClientId,
                 'client_change_id' => $boughtClientId,
                 'place_id' => (string)$placeId,
                 'budget_object_id' => (string)$placeId,
-                'sum' => -abs($soldAmount->minorUnits),
+                'sum' => -$soldMinorUnits,
                 'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
                 'comment' => $comment,
                 'currency_id' => (string)$soldCurrencyId,
@@ -259,7 +274,7 @@ final readonly class RecordService
                 'client_change_id' => $soldClientId,
                 'place_id' => (string)$placeId,
                 'budget_object_id' => (string)$placeId,
-                'sum' => abs($boughtAmount->minorUnits),
+                'sum' => $boughtMinorUnits,
                 'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
                 'comment' => $comment,
                 'currency_id' => (string)$boughtCurrencyId,
@@ -269,10 +284,7 @@ final readonly class RecordService
         ]);
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
-    public function update(Record $record): array
+    public function update(Record $record, ?RecordPatch $patch = null): WriteResult
     {
         if ($record->id === '') {
             throw new InvalidArgumentException('Cannot update a Drebedengi record without server id.');
@@ -280,10 +292,21 @@ final readonly class RecordService
         if ($record->planned) {
             throw new InvalidArgumentException('Cannot update a planned record through RecordService::update().');
         }
+        if ($record->operationType === OperationType::Transfer || $record->operationType === OperationType::Exchange) {
+            throw new InvalidArgumentException(
+                'Transfer and exchange records are paired and cannot be updated through single-record update().',
+            );
+        }
+        if ($record->operationType === OperationType::All) {
+            throw new InvalidArgumentException('Cannot update a record with OperationType::All.');
+        }
 
+        if ($patch !== null) {
+            $record = $record->withPatch($patch);
+        }
         $this->assertAmountMatchesCurrency($record->sum, $record->currencyId);
 
-        return $this->savePayloads([$record->toUpdatePayload($this->options->timezone)]);
+        return $this->writePayloads([$record->toUpdatePayload($this->options->timezone)]);
     }
 
     public function delete(string|int $id, OperationType $type): bool
@@ -330,9 +353,23 @@ final readonly class RecordService
         return DrebedengiNormalizer::listOfArrays($this->transport->call('setRecordList', [$payloads]));
     }
 
-    private function clientId(): int
+    /**
+     * @param list<array<string, mixed>> $payloads
+     */
+    private function writePayloads(array $payloads): WriteResult
     {
-        return random_int(1, 999_999_999);
+        return new WriteResult($this->savePayloads($payloads), $payloads);
+    }
+
+    private function writeToken(
+        ?RecordWriteToken $writeToken,
+        int $recordCount,
+        string $operation,
+    ): RecordWriteToken {
+        $writeToken ??= RecordWriteToken::generate($recordCount);
+        $writeToken->assertRecordCount($recordCount, $operation);
+
+        return $writeToken;
     }
 
     /**
@@ -445,15 +482,17 @@ final readonly class RecordService
         MoneyAmount $amount,
         int|string $currencyId,
         \DateTimeInterface $date,
-        string $comment = '',
+        string $comment,
+        int $clientId,
     ): array {
         $this->assertAmountMatchesCurrency($amount, $currencyId);
+        $minorUnits = $amount->absolute()->minorUnits;
 
         return [
-            'client_id' => $this->clientId(),
+            'client_id' => $clientId,
             'place_id' => (string)$placeId,
             'budget_object_id' => (string)$categoryId,
-            'sum' => -abs($amount->minorUnits),
+            'sum' => -$minorUnits,
             'operation_date' => DrebedengiDateTime::formatDateTime($date, $this->options->timezone),
             'comment' => $comment,
             'currency_id' => (string)$currencyId,

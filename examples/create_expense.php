@@ -28,4 +28,5 @@ $created = $client->records()->createExpense(
     comment: 'Created by drdengi-php-sdk example',
 );
 
-print_r($created);
+printf("Created record ID: %s\n", $created->firstServerId() ?? 'not returned');
+print_r($created->raw);

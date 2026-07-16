@@ -14,7 +14,10 @@ use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
 use Soz\Drebedengi\Model\Record;
+use Soz\Drebedengi\Model\RecordPatch;
 use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Model\RecordWriteToken;
+use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Service\RecordService;
 use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
@@ -35,7 +38,12 @@ final class RecordServiceTest extends TestCase
             comment: 'SDK test',
         );
 
-        self::assertSame([['server_id' => '10']], $result);
+        self::assertInstanceOf(WriteResult::class, $result);
+        self::assertSame([['server_id' => '10']], $result->raw);
+        self::assertSame(['10'], $result->serverIds);
+        self::assertSame('10', $result->firstServerId());
+        self::assertCount(1, $result);
+        self::assertSame(['server_id' => '10'], $result[0]);
         self::assertSame('setRecordList', $transport->calls[0]['method']);
 
         $payload = $transport->mapListArgument(0)[0];
@@ -181,12 +189,16 @@ final class RecordServiceTest extends TestCase
         $transport = new FakeTransport();
         $service = $this->service($transport);
 
-        self::assertSame([], $service->createExpenseGroup(
+        $result = $service->createExpenseGroup(
             placeId: '1',
             items: [],
             currencyId: '3',
             date: new \DateTimeImmutable('2026-06-14 12:00:00'),
-        ));
+        );
+
+        self::assertSame([], $result->raw);
+        self::assertSame([], $result->serverIds);
+        self::assertCount(0, $result);
         self::assertSame([], $transport->calls);
     }
 
@@ -204,7 +216,7 @@ final class RecordServiceTest extends TestCase
             date: new \DateTimeImmutable('2026-06-14 12:00:00'),
         );
 
-        self::assertSame([['server_id' => '10']], $result);
+        self::assertSame([['server_id' => '10']], $result->raw);
         self::assertCount(1, $transport->calls);
 
         $payload = $transport->mapListArgument(0)[0];
@@ -234,7 +246,8 @@ final class RecordServiceTest extends TestCase
             date: new \DateTimeImmutable('2026-06-14 10:00:00', new \DateTimeZone('UTC')),
         );
 
-        self::assertSame([['server_id' => '100'], ['server_id' => '101']], $result);
+        self::assertSame([['server_id' => '100'], ['server_id' => '101']], $result->raw);
+        self::assertSame(['100', '101'], $result->serverIds);
         self::assertCount(1, $transport->calls);
 
         $groupedPayloads = $transport->mapListArgument(0);
@@ -607,6 +620,145 @@ final class RecordServiceTest extends TestCase
 
         try {
             $this->service($transport)->update($record);
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testRejectsUpdatingOneHalfOfPairedOperationBeforeCallingSoap(): void
+    {
+        $transport = new FakeTransport();
+        $record = Record::fromSoap([
+            'id' => '20',
+            'place_id' => '1',
+            'budget_object_id' => '2',
+            'sum' => '-1234',
+            'operation_date' => '2026-06-14 12:00:00',
+            'comment' => 'Transfer',
+            'currency_id' => '3',
+            'is_duty' => 'f',
+            'operation_type' => OperationType::Transfer->value,
+            'server_move_id' => '21',
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('paired');
+
+        try {
+            $this->service($transport)->update($record, new RecordPatch(comment: 'Changed'));
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testUpdateAppliesPatchWithoutReconstructingRecord(): void
+    {
+        $transport = new FakeTransport(['setRecordList' => [['status' => 'ok']]]);
+        $service = $this->service($transport);
+        $record = Record::fromSoap([
+            'id' => '20',
+            'place_id' => '1',
+            'budget_object_id' => '2',
+            'sum' => '-1234',
+            'operation_date' => '2026-06-14 12:00:00',
+            'comment' => 'Lunch',
+            'currency_id' => '3',
+            'is_duty' => 'f',
+            'operation_type' => '3',
+        ], currency: Currency::fromSoap([
+            'id' => '3',
+            'name' => 'EUR',
+            'code' => 'EUR',
+            'ratio' => '1',
+        ]));
+
+        $result = $service->update($record, new RecordPatch(
+            amount: MoneyAmount::fromDecimalString('56.78'),
+            operationDate: new \DateTimeImmutable('2026-06-15 09:30:00'),
+            comment: 'Dinner',
+        ));
+
+        self::assertSame(['20'], $result->serverIds);
+        self::assertSame('20', $result->firstServerId());
+        self::assertSame([['status' => 'ok']], $result->raw);
+
+        $payload = $transport->mapListArgument(0)[0];
+        self::assertSame('20', $payload['server_id']);
+        self::assertSame(-5678, $payload['sum']);
+        self::assertSame('2026-06-15 09:30:00', $payload['operation_date']);
+        self::assertSame('Dinner', $payload['comment']);
+        self::assertSame('Lunch', $record->comment);
+        self::assertSame(-1234, $record->sum->minorUnits);
+    }
+
+    public function testCreateExpenseReusesExplicitWriteToken(): void
+    {
+        $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
+        $service = $this->service($transport);
+        $writeToken = RecordWriteToken::fromClientId(123456);
+
+        $first = $service->createExpense(
+            placeId: '1',
+            categoryId: '2',
+            amount: MoneyAmount::fromDecimalString('12.34'),
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+            writeToken: $writeToken,
+        );
+        $second = $service->createExpense(
+            placeId: '1',
+            categoryId: '2',
+            amount: MoneyAmount::fromDecimalString('12.34'),
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+            writeToken: $writeToken,
+        );
+
+        self::assertSame([123456], $first->clientIds);
+        self::assertSame([123456], $second->clientIds);
+        self::assertSame(123456, $transport->mapListArgument(0)[0]['client_id']);
+        self::assertSame(123456, $transport->mapListArgument(1)[0]['client_id']);
+    }
+
+    public function testTransferUsesExplicitPairedWriteToken(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        $result = $service->createTransfer(
+            fromPlaceId: '1',
+            toPlaceId: '2',
+            amount: MoneyAmount::fromDecimalString('5.00'),
+            currencyId: '3',
+            date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+            writeToken: RecordWriteToken::fromClientIds(111, 222),
+        );
+
+        $payloads = $transport->mapListArgument(0);
+        self::assertSame([111, 222], $result->clientIds);
+        self::assertSame(111, $payloads[0]['client_id']);
+        self::assertSame(222, $payloads[0]['client_move_id']);
+        self::assertSame(222, $payloads[1]['client_id']);
+        self::assertSame(111, $payloads[1]['client_move_id']);
+    }
+
+    public function testCreateRejectsWriteTokenOfWrongSizeBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = $this->service($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('requires a record write token with 2 client IDs; 1 provided');
+
+        try {
+            $service->createTransfer(
+                fromPlaceId: '1',
+                toPlaceId: '2',
+                amount: MoneyAmount::fromDecimalString('5.00'),
+                currencyId: '3',
+                date: new \DateTimeImmutable('2026-06-14 12:00:00'),
+                writeToken: RecordWriteToken::fromClientId(111),
+            );
         } finally {
             self::assertSame([], $transport->calls);
         }

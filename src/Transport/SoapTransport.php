@@ -6,10 +6,12 @@ namespace Soz\Drebedengi\Transport;
 
 use SoapClient;
 use SoapFault;
+use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Credentials;
 use Soz\Drebedengi\Endpoint;
+use Soz\Drebedengi\Exception\AmbiguousMutationException;
 use Soz\Drebedengi\Exception\EndpointUnavailableException;
-use Soz\Drebedengi\Exception\TransportException;
+use Soz\Drebedengi\Exception\SoapFaultException;
 
 final class SoapTransport implements TransportInterface
 {
@@ -24,36 +26,59 @@ final class SoapTransport implements TransportInterface
         private readonly Credentials $credentials,
         private readonly Endpoint $endpoint = new Endpoint(),
         private readonly array $soapOptions = [],
+        private readonly ClientOptions $options = new ClientOptions(),
     ) {
     }
 
     public function call(string $method, array $arguments = []): mixed
     {
         try {
-            return $this->soapClient()->{$method}(...array_merge([
+            return $this->soapClient($method)->{$method}(...array_merge([
                 $this->credentials->apiId,
                 $this->credentials->login,
                 $this->credentials->password,
             ], $arguments));
         } catch (SoapFault $exception) {
-            $exceptionClass = $this->isInfrastructureFault($exception)
-                ? EndpointUnavailableException::class
-                : TransportException::class;
+            $faultCode = $this->faultCode($exception);
+            $message = $this->sanitize(sprintf(
+                'Drebedengi SOAP call "%s" at %s failed [%s]: %s',
+                $method,
+                $this->endpoint->baseUri(),
+                $faultCode ?? 'unknown',
+                $exception->getMessage(),
+            ));
+            $retrySafe = CallPolicy::isReadOnly($method, $arguments);
 
-            throw new $exceptionClass(
-                $this->sanitize(sprintf(
-                    'Drebedengi SOAP call "%s" at %s failed [%s]: %s',
-                    $method,
-                    $this->endpoint->baseUri(),
-                    (string)($exception->faultcode ?? 'unknown'),
-                    $exception->getMessage(),
-                )),
-                0,
+            if (!$this->isInfrastructureFault($exception)) {
+                throw new SoapFaultException(
+                    message: $message,
+                    method: $method,
+                    endpoint: $this->endpoint->baseUri(),
+                    retrySafe: $retrySafe,
+                    faultCode: $faultCode,
+                );
+            }
+
+            if ($retrySafe) {
+                throw new EndpointUnavailableException(
+                    message: $message,
+                    method: $method,
+                    endpoint: $this->endpoint->baseUri(),
+                    retrySafe: true,
+                    faultCode: $faultCode,
+                );
+            }
+
+            throw new AmbiguousMutationException(
+                message: $message,
+                method: $method,
+                endpoint: $this->endpoint->baseUri(),
+                faultCode: $faultCode,
             );
         }
     }
 
-    public function soapClient(): SoapClient
+    public function soapClient(?string $method = null): SoapClient
     {
         if ($this->client instanceof SoapClient) {
             return $this->client;
@@ -65,12 +90,15 @@ final class SoapTransport implements TransportInterface
             $this->client = new SoapClient($this->endpoint->wsdlUri(), $options);
         } catch (SoapFault $exception) {
             throw new EndpointUnavailableException(
-                $this->sanitize(sprintf(
+                message: $this->sanitize(sprintf(
                     'Cannot initialize Drebedengi SOAP client at %s: %s',
                     $this->endpoint->baseUri(),
                     $exception->getMessage(),
                 )),
-                0,
+                method: $method,
+                endpoint: $this->endpoint->baseUri(),
+                retrySafe: true,
+                faultCode: $this->faultCode($exception),
             );
         }
 
@@ -82,13 +110,27 @@ final class SoapTransport implements TransportInterface
      */
     private function clientOptions(): array
     {
+        $typedOptions = [
+            'cache_wsdl' => $this->options->wsdlCache->value,
+        ];
+        if ($this->options->connectTimeout !== null) {
+            $typedOptions['connection_timeout'] = $this->options->connectTimeout;
+        }
+        if ($this->options->readTimeout !== null) {
+            $typedOptions['stream_context'] = stream_context_create([
+                'http' => ['timeout' => $this->options->readTimeout],
+            ]);
+        }
+
         return array_replace(
             [
                 'exceptions' => true,
                 'trace' => false,
-                'cache_wsdl' => WSDL_CACHE_NONE,
                 'location' => $this->endpoint->soapLocation(),
             ],
+            $typedOptions,
+            // Raw SOAP options remain the escape hatch and intentionally take
+            // precedence over typed options for backwards compatibility.
             $this->soapOptions,
             [
                 // These options are part of the transport contract. Disabling
@@ -98,6 +140,13 @@ final class SoapTransport implements TransportInterface
                 'location' => $this->endpoint->soapLocation(),
             ],
         );
+    }
+
+    private function faultCode(SoapFault $exception): ?string
+    {
+        $faultCode = trim((string)($exception->faultcode ?? ''));
+
+        return $faultCode !== '' ? $this->sanitize($faultCode) : null;
     }
 
     private function isInfrastructureFault(SoapFault $exception): bool

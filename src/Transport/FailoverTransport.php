@@ -4,30 +4,12 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Transport;
 
+use Soz\Drebedengi\Exception\AmbiguousMutationException;
 use Soz\Drebedengi\Exception\EndpointUnavailableException;
 use Soz\Drebedengi\Exception\TransportException;
 
 final class FailoverTransport implements TransportInterface
 {
-    /**
-     * Methods not listed here are treated as potentially mutating.
-     */
-    private const READ_ONLY_METHODS = [
-        'getAccessStatus' => true,
-        'getBalance' => true,
-        'getCategoryList' => true,
-        'getChangeList' => true,
-        'getCurrencyList' => true,
-        'getCurrentRevision' => true,
-        'getExpireDate' => true,
-        'getPlaceList' => true,
-        'getRightAccess' => true,
-        'getSourceList' => true,
-        'getSubscriptionStatus' => true,
-        'getTagList' => true,
-        'getUserIdByLogin' => true,
-    ];
-
     private ?int $activeIndex = null;
 
     /** @var non-empty-array<string, TransportInterface> */
@@ -47,8 +29,8 @@ final class FailoverTransport implements TransportInterface
 
     public function call(string $method, array $arguments = []): mixed
     {
-        if (!$this->isReadOnlyCall($method, $arguments)) {
-            $this->selectEndpoint();
+        if (!CallPolicy::isReadOnly($method, $arguments)) {
+            $this->selectEndpoint($method);
 
             // A mutation is deliberately sent only once. If its response is lost,
             // retrying against another domain could duplicate the operation.
@@ -61,14 +43,31 @@ final class FailoverTransport implements TransportInterface
                 // read-only endpoint probe before it is sent once.
                 $this->activeIndex = null;
 
-                throw new EndpointUnavailableException(
-                    sprintf(
+                if ($exception->retrySafe) {
+                    throw new EndpointUnavailableException(
+                        message: sprintf(
+                            'Drebedengi mutation "%s" was not sent to %s; it may be retried.',
+                            $method,
+                            $failedEndpoint,
+                        ),
+                        previous: $exception,
+                        method: $method,
+                        endpoint: $failedEndpoint,
+                        retrySafe: true,
+                        faultCode: $exception->faultCode,
+                    );
+                }
+
+                throw new AmbiguousMutationException(
+                    message: sprintf(
                         'Drebedengi mutation "%s" may have reached %s; it was not retried.',
                         $method,
                         $failedEndpoint,
                     ),
-                    0,
-                    $exception,
+                    previous: $exception,
+                    method: $method,
+                    endpoint: $failedEndpoint,
+                    faultCode: $exception->faultCode,
                 );
             }
         }
@@ -76,31 +75,28 @@ final class FailoverTransport implements TransportInterface
         return $this->callReadOnly($method, $arguments);
     }
 
-    /**
-     * getRecordList is read-only only in explicit report mode. Drebedengi uses
-     * is_report=false for initial synchronization and clears deduplication
-     * state, so an unknown or legacy argument shape must remain a mutation.
-     *
-     * @param list<mixed> $arguments
-     */
-    private function isReadOnlyCall(string $method, array $arguments): bool
-    {
-        if ($method !== 'getRecordList') {
-            return isset(self::READ_ONLY_METHODS[$method]);
-        }
-
-        $params = $arguments[0] ?? null;
-
-        return is_array($params) && ($params['is_report'] ?? null) === true;
-    }
-
-    private function selectEndpoint(): void
+    private function selectEndpoint(string $mutationMethod): void
     {
         if ($this->activeIndex !== null) {
             return;
         }
 
-        $this->callReadOnly('getAccessStatus');
+        try {
+            $this->callReadOnly('getAccessStatus');
+        } catch (EndpointUnavailableException $exception) {
+            throw new EndpointUnavailableException(
+                message: sprintf(
+                    'Cannot select a Drebedengi endpoint for mutation "%s": %s',
+                    $mutationMethod,
+                    $exception->getMessage(),
+                ),
+                previous: $exception,
+                method: $mutationMethod,
+                endpoint: $exception->endpoint,
+                retrySafe: true,
+                faultCode: $exception->faultCode,
+            );
+        }
     }
 
     /**
@@ -130,12 +126,15 @@ final class FailoverTransport implements TransportInterface
                     $this->activeIndex = null;
 
                     throw new EndpointUnavailableException(
-                        sprintf(
+                        message: sprintf(
                             'Drebedengi SOAP endpoints are unavailable; attempted: %s.',
                             implode(', ', $attempts),
                         ),
-                        0,
-                        $exception,
+                        previous: $exception,
+                        method: $method,
+                        endpoint: $endpoints[$index],
+                        retrySafe: true,
+                        faultCode: $exception->faultCode,
                     );
                 }
             } catch (TransportException $exception) {
@@ -147,7 +146,11 @@ final class FailoverTransport implements TransportInterface
             }
         }
 
-        throw new EndpointUnavailableException('No Drebedengi SOAP endpoint was attempted.');
+        throw new EndpointUnavailableException(
+            message: 'No Drebedengi SOAP endpoint was attempted.',
+            method: $method,
+            retrySafe: true,
+        );
     }
 
     private function activeTransport(): TransportInterface

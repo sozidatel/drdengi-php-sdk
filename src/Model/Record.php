@@ -208,6 +208,11 @@ final readonly class Record implements \JsonSerializable
         );
     }
 
+    public function withPatch(RecordPatch $patch): self
+    {
+        return $patch->applyTo($this);
+    }
+
     /**
      * @return array{
      *     id: string,
