@@ -19,6 +19,7 @@ final readonly class Source implements \JsonSerializable
         public bool $hidden,
         public ?string $sort,
         public array $raw,
+        public ?string $description = null,
     ) {
     }
 
@@ -35,6 +36,7 @@ final readonly class Source implements \JsonSerializable
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),
             sort: DrebedengiNormalizer::nullableId($raw['sort'] ?? null),
             raw: $raw,
+            description: DrebedengiNormalizer::nullableText($raw['description'] ?? null),
         );
     }
 
@@ -46,6 +48,7 @@ final readonly class Source implements \JsonSerializable
      *     familyId: string|null,
      *     hidden: bool,
      *     sort: string|null,
+     *     description: string|null,
      *     raw: array<string, mixed>
      * }
      */
@@ -58,6 +61,7 @@ final readonly class Source implements \JsonSerializable
             'familyId' => $this->familyId,
             'hidden' => $this->hidden,
             'sort' => $this->sort,
+            'description' => $this->description,
             'raw' => $this->raw,
         ];
     }

@@ -99,6 +99,18 @@ $tags = $client->tags()->list();
 $balance = $client->balance()->list();
 ```
 
+У всех пяти финансовых справочников — счетов, категорий, источников, валют и
+тегов — одинаковые точечные методы:
+
+```php
+$categories = $client->categories()->byIds(['10', '20']);
+$category = $client->categories()->find('10');    // Category|null
+$category = $client->categories()->require('10'); // Category или InvalidArgumentException
+```
+
+`byIds()` проверяет положительные ID, удаляет повторы и при пустом списке не
+делает SOAP-вызов. Неизвестные ID сервер просто не включает в ответ.
+
 Остатки на выбранную дату и дополнительные опции:
 
 ```php
@@ -155,48 +167,134 @@ foreach ($client->categories()->options(includeHidden: false) as $option) {
 }
 ```
 
-Создание категории расходов:
+## CRUD финансовых справочников
+
+Создание и частичное обновление возвращают уже перечитанный типизированный DTO,
+а не сырой SOAP-массив:
 
 ```php
+use Soz\Drebedengi\Model\ReferenceWriteToken;
+
+$writeToken = ReferenceWriteToken::generate();
 $category = $client->categories()->create(
     name: 'Кафе',
     parentId: null, // null означает корневую категорию
+    hidden: false,
+    sort: 10,
+    description: 'Еда вне дома',
+    writeToken: $writeToken,
 );
 
-$categoryId = $category->id;
-```
-
-Безопасное частичное обновление категории или обычного счёта:
-
-```php
-$client->categories()->update($categoryId, [
+$category = $client->categories()->update($category->id, [
     'name' => 'Кафе и рестораны',
     'is_hidden' => false,
 ]);
 
-$placeId = $client->places()->accounts()[0]->id;
-$client->places()->update($placeId, [
+$account = $client->places()->createAccount(
+    name: 'Наличные для поездки',
+    hidden: true,
+);
+$account = $client->places()->update($account->id, [
     'name' => 'Основная карта',
     'description' => 'Повседневные расходы',
 ]);
 ```
 
-Перед записью SDK проверяет полный доступ, читает существующий объект и дополняет
-patch обязательными legacy-полями. Ограниченный доступ маскирует часть этих
-полей, поэтому обновление в таком режиме отклоняется. Неизвестные поля, пустые
-patch и попытки обновить папки, credit-card либо системные долговые счета
-отклоняются до `setCategoryList` / `setPlaceList`. Полный `raw`-payload из старого
-кода также принимается: server-managed поля безопасно игнорируются.
-Метод возвращает проверенный сырой SOAP-ответ. В отличие от методов создания
-операций, справочные update-методы в 0.6 ещё не оборачивают его в `WriteResult`.
+`createAccount()` намеренно создаёт только обычный `type=4` счёт. SOAP не даёт
+безопасного контракта создания папок, кредитных карт или системных долговых
+счетов. Обновление также отклоняет такие объекты, потому что legacy
+`setPlaceList` может потерять их server-managed состояние.
 
-Источники доходов поддерживают тот же интерфейс:
+`places()->delete()` ещё строже: он удаляет только обычный пустой счёт и перед
+`deleteObject()` проверяет весь журнал, включая плановые операции. Папки,
+долговые, credit-card, purse-owned и auto-hide счета отклоняются. Legacy-сервер
+не выполняет это удаление транзакционно, поэтому во время удаления нельзя
+параллельно добавлять операции в тот же счёт.
+
+Источники доходов и теги поддерживают тот же CRUD:
 
 ```php
 $sources = $client->sources()->list(); // плоский список, отсортирован по sort
 $sourceTree = $client->sources()->tree(includeHidden: false);
 $sourceOptions = $client->sources()->options(includeHidden: false);
+
+$source = $client->sources()->create('Возвраты');
+$source = $client->sources()->update($source->id, ['name' => 'Возвраты и компенсации']);
+
+$tag = $client->tags()->create('Командировка', hidden: true);
+$tag = $client->tags()->update($tag->id, ['is_hidden' => false]);
+$tagOptions = $client->tags()->options(includeHidden: false);
 ```
+
+Список тегов может включать семейные теги других пользователей.
+`tags()->update()` и `tags()->delete()` намеренно работают только с тегами,
+чей `userId` совпадает с текущим пользователем: update через legacy
+`setTagList` иначе переписал бы владельца, а delete удалил бы чужой видимый
+семейный тег. Если владелец не пришёл в SOAP-ответе, SDK также отклоняет
+mutation.
+
+При удалении тега Дребеденьги могут убрать первое вхождение `[ИмяТега]` из
+комментариев связанных операций, поэтому автоматическое удаление безопаснее
+использовать для новых или заведомо неиспользуемых тегов.
+
+Валюты имеют отдельные методы для безопасного изменения курса и default:
+
+```php
+$previousDefault = $client->currencies()->default();
+
+$currency = $client->currencies()->create(
+    name: 'Тестовая валюта', // name и code: максимум 16 символов
+    course: '1.25',
+    code: 'TST',
+    hidden: true,
+);
+
+$currency = $client->currencies()->update($currency->id, [
+    'course' => '1.30',
+]);
+
+// Менять default безопасно только если прежнюю валюту потом можно записать
+// обратно через legacy setCurrencyList.
+if (
+    $previousDefault !== null
+    && $previousDefault->ratio === 1
+    && !$previousDefault->investing
+) {
+    $currency = $client->currencies()->setDefault($currency->id);
+    $client->currencies()->setDefault($previousDefault->id);
+}
+$client->currencies()->delete($currency->id);
+```
+
+Legacy `setCurrencyList` принудительно записывает `ratio=1` и
+`is_investing=false`. Поэтому SDK разрешает update/default только для обычных
+неинвестиционных валют с `ratio=1` и отклоняет опасную запись crypto/investing
+валют до SOAP-вызова. Непосредственно перед типизированной mutation старый
+каталог валют инвалидируется, а после успешного ответа перечитывается. Если
+ответ потерян или не подтверждает целевой ID, следующий доступ снова обратится
+к серверу, а не вернёт потенциально устаревший снимок.
+
+Перед типизированными `update()` и `delete()`, а также
+`currencies()->setDefault()`, SDK проверяет полный доступ. Update читает
+существующий объект и дополняет patch обязательными legacy-полями. Delete
+сначала убеждается, что ID принадлежит именно этому справочнику: серверный тип
+`object` общий для категорий, источников и счетов. Неизвестный ID возвращает
+`false`, не выполняя удаление. Для нестандартных будущих полей у каждого сервиса
+сохранён `savePayloads()` как raw escape hatch. Он намеренно обходит
+типизированные guards и read-back; после `currencies()->savePayloads()` вызови
+`currencies()->refresh()`, если общий каталог должен сразу увидеть изменения.
+
+Удаление родительской категории сохраняет legacy cascade-семантику и может
+удалить всё поддерево. Источники используют тот же иерархический
+`deleteObject(..., 'object')`. SDK не добавляет leaf-only guard, поэтому перед
+удалением категории или источника проверь детей через `list()` / `tree()`, если
+каскад не задуман.
+
+`ReferenceWriteToken` позволяет немедленно повторить создание того же
+справочного объекта с прежним `client_id`. Как и `RecordWriteToken`, это не
+долговечный idempotency key: повтор должен идти с совершенно тем же payload до
+следующей успешной записи справочника того же типа. При failover повторяй только
+на endpoint из `AmbiguousMutationException`.
 
 Аккаунт и подписка:
 
@@ -524,8 +622,10 @@ composer test:integration:write
 
 Для обратной совместимости старый `DREB_RUN_LIVE_TESTS=1` пока включает только
 read-only тесты и никогда не разрешает запись. Записывающие тесты создают только
-объекты с уникальными тестовыми именами или комментариями и удаляют их через
-точечные методы API. `deleteAll` в автоматических тестах не используется.
+объекты с уникальными тестовыми именами или комментариями, покрывают операции и
+CRUD справочников, восстанавливают исходную default-валюту и удаляют fixtures
+двумя проходами. После каждого теста выполняется повторное чтение всех типов и
+проверка нулевого остатка. `deleteAll` в автоматических тестах не используется.
 
 Если аккаунт отвечает `No payment` на `setRecordList`, тест записи будет пропущен. Для полной проверки создания/удаления операций нужен тестовый аккаунт с активным доступом к API-записи.
 

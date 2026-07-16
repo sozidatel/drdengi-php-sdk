@@ -45,7 +45,11 @@ final class FakeTransport implements TransportInterface
                 throw new \LogicException(sprintf('No recorded call for "%s".', $method));
             }
 
-            return $sequence[$index] ?? [];
+            $response = $sequence[$index] ?? [];
+        }
+
+        if ($response instanceof \Throwable) {
+            throw $response;
         }
 
         return $response;

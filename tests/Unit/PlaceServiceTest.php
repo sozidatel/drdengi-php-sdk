@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Soz\Drebedengi\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\UnexpectedResponseException;
+use Soz\Drebedengi\Model\ReferenceWriteToken;
 use Soz\Drebedengi\Service\PlaceService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -67,24 +69,193 @@ final class PlaceServiceTest extends TestCase
         self::assertSame([], $transport->calls);
     }
 
+    public function testByIdsValidatesNormalizesAndDeduplicatesIds(): void
+    {
+        $transport = new FakeTransport([
+            'getPlaceList' => [
+                ['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash'],
+                ['id' => '20', 'type' => '4', 'parent_id' => '-1', 'name' => 'Bank'],
+            ],
+        ]);
+
+        $places = (new PlaceService($transport))->byIds(['10', 10, '20']);
+
+        self::assertSame(['20', '10'], array_map(static fn ($place): string => $place->id, $places));
+        self::assertSame([['10', '20']], $transport->calls[0]['arguments']);
+    }
+
+    public function testByIdsRejectsInvalidIdBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Place ID');
+
+        try {
+            (new PlaceService($transport))->byIds(['10', '-1']);
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testFindAndRequireReturnTypedPlace(): void
+    {
+        $transport = new FakeTransport([
+            'getPlaceList' => [
+                '__sequence' => [
+                    [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+                    [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+                ],
+            ],
+        ]);
+        $service = new PlaceService($transport);
+
+        self::assertSame('10', $service->find('10')?->id);
+        self::assertSame('Cash', $service->require(10)->name);
+    }
+
+    public function testFindReturnsNullAndRequireRejectsUnknownPlace(): void
+    {
+        $service = new PlaceService(new FakeTransport([
+            'getPlaceList' => ['__sequence' => [[], []]],
+        ]));
+
+        self::assertNull($service->find('10'));
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown place ID "10"');
+
+        $service->require('10');
+    }
+
+    public function testCreatesHiddenNormalAccountViaSetPlaceList(): void
+    {
+        $transport = new FakeTransport([
+            'setPlaceList' => [['server_id' => '101', 'client_id' => '123']],
+            'getPlaceList' => [[
+                'id' => '101',
+                'type' => '4',
+                'parent_id' => '10',
+                'name' => 'Cash',
+                'is_hidden' => 't',
+                'sort' => '20',
+                'icon_id' => '8',
+                'description' => 'Wallet',
+            ]],
+        ]);
+
+        $place = (new PlaceService($transport))->createAccount(
+            name: 'Cash',
+            parentId: '10',
+            hidden: true,
+            sort: 20,
+            iconId: 8,
+            description: 'Wallet',
+            writeToken: ReferenceWriteToken::fromClientId(123),
+        );
+
+        self::assertSame('101', $place->id);
+        self::assertTrue($place->isAccount());
+        self::assertTrue($place->hidden);
+        self::assertSame('Wallet', $place->description);
+        self::assertSame([
+            'client_id' => 123,
+            'name' => 'Cash',
+            'parent_id' => '10',
+            'type' => 4,
+            'is_hidden' => true,
+            'is_for_duty' => false,
+            'sort' => '20',
+            'purse_of_nuid' => null,
+            'icon_id' => '8',
+            'is_autohide' => false,
+            'description' => 'Wallet',
+            'is_credit_card' => false,
+        ], $transport->mapListArgument(0)[0]);
+        self::assertSame([['101']], $transport->calls[1]['arguments']);
+    }
+
+    public function testCreateAccountUsesSafeDefaults(): void
+    {
+        $transport = new FakeTransport([
+            'setPlaceList' => [['server_id' => '101', 'client_id' => '123']],
+            'getPlaceList' => [[
+                'id' => '101',
+                'type' => '4',
+                'parent_id' => '-1',
+                'name' => 'Cash',
+                'is_hidden' => 't',
+            ]],
+        ]);
+
+        (new PlaceService($transport))->createAccount(
+            'Cash',
+            writeToken: ReferenceWriteToken::fromClientId(123),
+        );
+
+        $payload = $transport->mapListArgument(0)[0];
+        self::assertSame('-1', $payload['parent_id']);
+        self::assertTrue($payload['is_hidden']);
+        self::assertSame('0', $payload['sort']);
+        self::assertNull($payload['icon_id']);
+        self::assertNull($payload['description']);
+    }
+
+    public function testCreateAccountValidatesNameParentAndIconBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = new PlaceService($transport);
+
+        foreach ([
+            static fn () => $service->createAccount(str_repeat('x', 129)),
+            static fn () => $service->createAccount('Cash', parentId: 0),
+            static fn () => $service->createAccount('Cash', iconId: 0),
+        ] as $call) {
+            try {
+                $call();
+                self::fail('Invalid account input must be rejected.');
+            } catch (InvalidArgumentException) {
+            }
+        }
+
+        self::assertSame([], $transport->calls);
+    }
+
     public function testUpdateReadsCurrentPlaceAndSendsCompletePayload(): void
     {
         $transport = new FakeTransport([
             'getRightAccess' => '0',
-            'getPlaceList' => [[
-                'id' => '10',
-                'budget_family_id' => '7',
-                'type' => '4',
-                'parent_id' => '-3',
-                'name' => 'Old name',
-                'is_hidden' => 't',
-                'is_for_duty' => 'f',
-                'sort' => '12',
-                'purse_of_nuid' => '42',
-                'icon_id' => '8',
-                'is_autohide' => 't',
-                'description' => 'Keep this description',
-                'is_credit_card' => 'f',
+            'getPlaceList' => ['__sequence' => [
+                [[
+                    'id' => '10',
+                    'budget_family_id' => '7',
+                    'type' => '4',
+                    'parent_id' => '-3',
+                    'name' => 'Old name',
+                    'is_hidden' => 't',
+                    'is_for_duty' => 'f',
+                    'sort' => '12',
+                    'purse_of_nuid' => '42',
+                    'icon_id' => '8',
+                    'is_autohide' => 't',
+                    'description' => 'Keep this description',
+                    'is_credit_card' => 'f',
+                ]],
+                [[
+                    'id' => '10',
+                    'budget_family_id' => '7',
+                    'type' => '4',
+                    'parent_id' => '-3',
+                    'name' => 'Cash',
+                    'is_hidden' => 't',
+                    'is_for_duty' => 'f',
+                    'sort' => '12',
+                    'purse_of_nuid' => '42',
+                    'icon_id' => '8',
+                    'is_autohide' => 't',
+                    'description' => 'Keep this description',
+                    'is_credit_card' => 'f',
+                ]],
             ]],
             'setPlaceList' => [['server_id' => '10', 'status' => 'updated']],
         ]);
@@ -95,11 +266,13 @@ final class PlaceServiceTest extends TestCase
             'name' => '  Cash  ',
         ]);
 
-        self::assertSame([['server_id' => '10', 'status' => 'updated']], $result);
+        self::assertSame('10', $result->id);
+        self::assertSame('Cash', $result->name);
         self::assertSame('getRightAccess', $transport->calls[0]['method']);
         self::assertSame('getPlaceList', $transport->calls[1]['method']);
         self::assertSame([['10']], $transport->calls[1]['arguments']);
         self::assertSame('setPlaceList', $transport->calls[2]['method']);
+        self::assertSame('getPlaceList', $transport->calls[3]['method']);
         self::assertSame([
             'server_id' => '10',
             'name' => 'Cash',
@@ -145,6 +318,33 @@ final class PlaceServiceTest extends TestCase
         self::assertSame('20', $payload['sort']);
         self::assertNull($payload['description']);
         self::assertSame('9', $payload['icon_id']);
+    }
+
+    public function testUpdateRequiresResponseToConfirmTargetServerId(): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [[
+                'id' => '10',
+                'type' => '4',
+                'parent_id' => '-1',
+                'name' => 'Old name',
+            ]],
+            'setPlaceList' => [['server_id' => '11']],
+        ]);
+        $service = new PlaceService($transport);
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('does not confirm place server_id 10');
+
+        try {
+            $service->update('10', ['name' => 'New name']);
+        } finally {
+            self::assertSame(
+                ['getRightAccess', 'getPlaceList', 'setPlaceList'],
+                array_column($transport->calls, 'method'),
+            );
+        }
     }
 
     public function testUpdateRejectsInvalidPlaceIdBeforeSoapCall(): void
@@ -321,17 +521,160 @@ final class PlaceServiceTest extends TestCase
 
     public function testDeletesPlaceAsObject(): void
     {
-        $transport = new FakeTransport(['deleteObject' => '1']);
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+            'getRecordList' => [],
+            'deleteObject' => '1',
+        ]);
         $service = new PlaceService($transport);
 
         self::assertTrue($service->delete('10'));
-        self::assertSame('deleteObject', $transport->calls[0]['method']);
-        self::assertSame([10, 'object'], $transport->calls[0]['arguments']);
+        self::assertSame(
+            ['getRightAccess', 'getPlaceList', 'getRecordList', 'deleteObject'],
+            array_column($transport->calls, 'method'),
+        );
+        self::assertSame([10, 'object'], $transport->calls[3]['arguments']);
+    }
+
+    public function testDeleteRejectsLimitedAccessBeforeReadingPlace(): void
+    {
+        $transport = new FakeTransport(['getRightAccess' => '1']);
+        $service = new PlaceService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('place deletes require full account access');
+
+        try {
+            $service->delete('10');
+        } finally {
+            self::assertSame(['getRightAccess'], array_column($transport->calls, 'method'));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $place
+     */
+    #[DataProvider('unsafeDeletePlaces')]
+    public function testDeleteRejectsNonOrdinaryPlaceBeforeRecordPreflight(array $place): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [$place],
+        ]);
+        $service = new PlaceService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('is not an ordinary account that can be deleted safely');
+
+        try {
+            $service->delete('10');
+        } finally {
+            self::assertSame(
+                ['getRightAccess', 'getPlaceList'],
+                array_column($transport->calls, 'method'),
+            );
+        }
+    }
+
+    /**
+     * @return iterable<string, array{array<string, mixed>}>
+     */
+    public static function unsafeDeletePlaces(): iterable
+    {
+        yield 'folder' => [[
+            'id' => '10',
+            'type' => '9',
+            'parent_id' => '-1',
+            'name' => 'Folder',
+        ]];
+        yield 'duty account' => [[
+            'id' => '10',
+            'type' => '4',
+            'parent_id' => '-1',
+            'name' => 'Debt account',
+            'is_for_duty' => 't',
+        ]];
+        yield 'credit card' => [[
+            'id' => '10',
+            'type' => '4',
+            'parent_id' => '-1',
+            'name' => 'Credit card',
+            'is_credit_card' => 't',
+        ]];
+        yield 'another user purse' => [[
+            'id' => '10',
+            'type' => '4',
+            'parent_id' => '-1',
+            'name' => 'Family purse',
+            'purse_of_nuid' => '42',
+        ]];
+        yield 'auto-hidden account' => [[
+            'id' => '10',
+            'type' => '4',
+            'parent_id' => '-1',
+            'name' => 'Auto-hidden',
+            'is_autohide' => 't',
+        ]];
+    }
+
+    public function testDeleteBlocksAccountWithRecordsAndUsesExactSafePreflightParams(): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+            'getRecordList' => [['id' => '99']],
+            'deleteObject' => '1',
+        ]);
+        $service = new PlaceService($transport);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('account 10 has records and cannot be deleted safely');
+
+        try {
+            $service->delete('10');
+        } finally {
+            self::assertSame(
+                ['getRightAccess', 'getPlaceList', 'getRecordList'],
+                array_column($transport->calls, 'method'),
+            );
+            self::assertSame([
+                'is_report' => true,
+                'is_show_duty' => true,
+                'is_with_planned' => true,
+                'r_period' => 6,
+                'r_how' => 1,
+                'r_what' => 6,
+                'r_who' => 0,
+                'r_currency' => 0,
+                'r_is_place' => 1,
+                'r_is_tag' => 0,
+                'r_is_category' => 0,
+                'r_place' => ['10'],
+            ], $transport->mapArgument(2));
+            self::assertSame([], $transport->calls[2]['arguments'][1]);
+        }
+    }
+
+    public function testDeleteReturnsFalseWithoutMutationForMissingOrForeignObject(): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [],
+        ]);
+
+        self::assertFalse((new PlaceService($transport))->delete('10'));
+        self::assertSame(['getRightAccess', 'getPlaceList'], array_column($transport->calls, 'method'));
     }
 
     public function testDeleteRejectsMalformedPlaceResponse(): void
     {
-        $service = new PlaceService(new FakeTransport(['deleteObject' => 'broken']));
+        $service = new PlaceService(new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+            'getRecordList' => [],
+            'deleteObject' => 'broken',
+        ]));
 
         $this->expectException(UnexpectedResponseException::class);
         $this->expectExceptionMessage('deleteObject response for place is not an integer');
@@ -341,7 +684,12 @@ final class PlaceServiceTest extends TestCase
 
     public function testDeleteRejectsUnknownPlaceStatus(): void
     {
-        $service = new PlaceService(new FakeTransport(['deleteObject' => -1]));
+        $service = new PlaceService(new FakeTransport([
+            'getRightAccess' => '0',
+            'getPlaceList' => [['id' => '10', 'type' => '4', 'parent_id' => '-1', 'name' => 'Cash']],
+            'getRecordList' => [],
+            'deleteObject' => -1,
+        ]));
 
         $this->expectException(UnexpectedResponseException::class);
         $this->expectExceptionMessage('must be 0 or 1');
@@ -362,5 +710,22 @@ final class PlaceServiceTest extends TestCase
         } finally {
             self::assertSame([], $transport->calls);
         }
+    }
+
+    public function testSavePayloadsRemainsRawEscapeHatch(): void
+    {
+        $transport = new FakeTransport([
+            'setPlaceList' => [['server_id' => '10', 'status' => 'updated']],
+        ]);
+        $service = new PlaceService($transport);
+
+        self::assertSame([], $service->savePayloads([]));
+        self::assertSame([], $transport->calls);
+
+        self::assertSame(
+            [['server_id' => '10', 'status' => 'updated']],
+            $service->savePayloads([['server_id' => '10', 'name' => 'Cash']]),
+        );
+        self::assertSame(['setPlaceList'], array_column($transport->calls, 'method'));
     }
 }

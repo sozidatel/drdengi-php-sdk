@@ -10,6 +10,8 @@ use Soz\Drebedengi\Model\Category;
 use Soz\Drebedengi\Model\CategoryNode;
 use Soz\Drebedengi\Model\CategoryOption;
 use Soz\Drebedengi\Model\DeleteObjectType;
+use Soz\Drebedengi\Model\ReferenceWriteToken;
+use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Transport\TransportInterface;
 
@@ -39,9 +41,30 @@ final readonly class CategoryService
             return [];
         }
 
+        $ids = $this->normalizeIds($ids);
+
         return $this->sort(array_map(Category::fromSoap(...), DrebedengiNormalizer::listOfArrays(
-            $this->transport->call('getCategoryList', [$this->normalizeIds($ids)]),
+            $this->transport->call('getCategoryList', [$ids]),
         )));
+    }
+
+    public function find(int|string $id): ?Category
+    {
+        $id = (string)DrebedengiNormalizer::positiveIntegerId($id, 'Category ID');
+
+        foreach ($this->byIds([$id]) as $category) {
+            if ($category->id === $id) {
+                return $category;
+            }
+        }
+
+        return null;
+    }
+
+    public function require(int|string $id): Category
+    {
+        return $this->find($id)
+            ?? throw new InvalidArgumentException(sprintf('Unknown category ID "%s".', (string)$id));
     }
 
     /**
@@ -76,33 +99,35 @@ final readonly class CategoryService
         string $name,
         int|string|null $parentId = null,
         bool $hidden = false,
+        int|string $sort = 0,
+        ?string $description = null,
+        ?ReferenceWriteToken $writeToken = null,
     ): Category {
-        $name = trim($name);
-        if ($name === '') {
-            throw new InvalidArgumentException('Cannot create a Drebedengi category without name.');
-        }
+        $name = $this->normalizeName($name, 'Category name');
+        $parentId = $this->normalizeParentId($parentId);
+        $sort = $this->normalizeIntegerString($sort, 'Category field "sort"');
+        $writeToken ??= ReferenceWriteToken::generate();
 
         $payload = [
-            'client_id' => $this->clientId(),
+            'client_id' => $writeToken->clientId,
             'name' => $name,
-            'parent_id' => $parentId === null ? '-1' : (string)$parentId,
+            'parent_id' => $parentId,
             'type' => 3,
             'is_hidden' => $hidden,
             'is_for_duty' => false,
-            'sort' => '0',
+            'sort' => $sort,
+            'description' => $description,
         ];
 
-        $serverId = $this->extractServerId($this->savePayloads([$payload]));
+        $result = new WriteResult($this->savePayloads([$payload]), [$payload]);
+        $serverId = $result->serverIdForClientId($writeToken->clientId);
         if ($serverId === null) {
-            throw new UnexpectedResponseException('Drebedengi setCategoryList response does not contain created category server_id.');
+            throw new UnexpectedResponseException(
+                'Drebedengi setCategoryList response does not map the created category client_id to server_id.',
+            );
         }
 
-        $category = $this->byIds([$serverId])[0] ?? null;
-        if (!$category instanceof Category) {
-            throw new UnexpectedResponseException(sprintf('Created Drebedengi category "%s" was not found by server id %s.', $name, $serverId));
-        }
-
-        return $category;
+        return $this->readBackAfterWrite($serverId, sprintf('Created Drebedengi category "%s"', $name));
     }
 
     /**
@@ -110,13 +135,12 @@ final readonly class CategoryService
      * Supported patch fields: name, parent_id, is_hidden, sort, description.
      *
      * @param array<string, mixed> $fields
-     * @return list<array<string, mixed>>
      */
-    public function update(string|int $serverId, array $fields): array
+    public function update(string|int $serverId, array $fields): Category
     {
         $serverId = DrebedengiNormalizer::positiveIntegerId($serverId, 'Category ID');
         $patch = $this->normalizeUpdatePatch($fields);
-        $this->assertFullAccessForUpdate();
+        $this->assertFullAccess('updates');
         $category = $this->categoryForUpdate((string)$serverId);
 
         $rawName = $this->nullableRawString($category->raw, 'name', 'category') ?? $category->name;
@@ -136,12 +160,19 @@ final readonly class CategoryService
             'description' => $rawDescription === null ? null : $this->decodeSoapHtml($rawDescription),
         ], $patch);
 
-        return $this->savePayloads([$payload]);
+        $this->confirmExistingWrite($payload, (string)$serverId);
+
+        return $this->readBackAfterWrite((string)$serverId, 'Updated Drebedengi category');
     }
 
     public function delete(string|int $id): bool
     {
         $id = DrebedengiNormalizer::positiveIntegerId($id, 'Category ID');
+        $this->assertFullAccess('deletes');
+        if ($this->find($id) === null) {
+            return false;
+        }
+
         $response = $this->transport->call('deleteObject', [$id, DeleteObjectType::Object->value]);
         if (!is_int($response) && !is_string($response)) {
             throw new UnexpectedResponseException(sprintf(
@@ -225,11 +256,6 @@ final readonly class CategoryService
         }
     }
 
-    private function clientId(): int
-    {
-        return random_int(1, 999_999_999);
-    }
-
     /**
      * @param array<string, mixed> $fields
      * @return array<string, bool|string|null>
@@ -244,6 +270,14 @@ final readonly class CategoryService
         // Accept complete objects returned by older SDK usage patterns, but never
         // let server-managed values override the method argument or fetched state.
         $ignored = ['id', 'server_id', 'budget_family_id', 'family_id', 'type', 'is_for_duty'];
+        $legacyPayload = array_key_exists('id', $fields)
+            && array_key_exists('parent_id', $fields)
+            && array_key_exists('budget_family_id', $fields)
+            && array_key_exists('type', $fields)
+            && array_key_exists('name', $fields)
+            && array_key_exists('is_hidden', $fields)
+            && array_key_exists('sort', $fields)
+            && array_key_exists('description', $fields);
         $allowed = array_merge($mutable, $ignored);
         $unsupported = array_values(array_diff(array_keys($fields), $allowed));
         if ($unsupported !== []) {
@@ -263,7 +297,11 @@ final readonly class CategoryService
                     $patch[$field] = $this->normalizeParentId($value);
                     break;
                 case 'is_hidden':
-                    $patch[$field] = $this->normalizeBoolean($value, 'Category field "is_hidden"');
+                    $patch[$field] = $this->normalizeBoolean(
+                        $value,
+                        'Category field "is_hidden"',
+                        $legacyPayload,
+                    );
                     break;
                 case 'sort':
                     $patch[$field] = $this->normalizeIntegerString($value, 'Category field "sort"');
@@ -292,21 +330,23 @@ final readonly class CategoryService
         return $patch;
     }
 
-    private function assertFullAccessForUpdate(): void
+    private function assertFullAccess(string $operation): void
     {
         if ((new AccountService($this->transport))->rightAccess() !== '0') {
             throw new InvalidArgumentException(
-                'Drebedengi category updates require full account access; limited access masks required fields.',
+                sprintf(
+                    'Drebedengi category %s require full account access; limited access masks required fields.',
+                    $operation,
+                ),
             );
         }
     }
 
     private function categoryForUpdate(string $serverId): Category
     {
-        foreach ($this->byIds([$serverId]) as $category) {
-            if ($category->id === $serverId) {
-                return $category;
-            }
+        $category = $this->find($serverId);
+        if ($category !== null) {
+            return $category;
         }
 
         throw new UnexpectedResponseException(sprintf(
@@ -324,6 +364,13 @@ final readonly class CategoryService
         $value = trim($value);
         if ($value === '') {
             throw new InvalidArgumentException(sprintf('%s cannot be empty.', $context));
+        }
+        $characters = preg_match_all('/./us', $value, $unused);
+        if ($characters === false) {
+            throw new InvalidArgumentException(sprintf('%s must be valid UTF-8.', $context));
+        }
+        if ($characters > 128) {
+            throw new InvalidArgumentException(sprintf('%s cannot exceed 128 characters.', $context));
         }
 
         return $value;
@@ -356,13 +403,20 @@ final readonly class CategoryService
         return trim((string)$value);
     }
 
-    private function normalizeBoolean(mixed $value, string $context): bool
+    private function normalizeBoolean(mixed $value, string $context, bool $allowSoapToken = false): bool
     {
-        try {
-            return DrebedengiNormalizer::bool($value);
-        } catch (UnexpectedResponseException $exception) {
-            throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context), 0, $exception);
+        if (is_bool($value)) {
+            return $value;
         }
+        if ($allowSoapToken) {
+            return match ($value) {
+                1, '1', 't' => true,
+                0, '0', 'f' => false,
+                default => throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context)),
+            };
+        }
+
+        throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context));
     }
 
     /**
@@ -415,21 +469,32 @@ final readonly class CategoryService
         return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
-    /**
-     * @param list<array<string, mixed>> $created
-     */
-    private function extractServerId(array $created): ?string
+    private function readBackAfterWrite(string $serverId, string $context): Category
     {
-        foreach ($created as $item) {
-            foreach (['server_id', 'id'] as $field) {
-                $value = $item[$field] ?? null;
-                if ((is_int($value) || is_string($value)) && trim((string)$value) !== '') {
-                    return (string)$value;
-                }
-            }
+        $category = $this->find($serverId);
+        if ($category !== null) {
+            return $category;
         }
 
-        return null;
+        throw new UnexpectedResponseException(sprintf(
+            '%s was not found by server id %s after write.',
+            $context,
+            $serverId,
+        ));
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function confirmExistingWrite(array $payload, string $serverId): void
+    {
+        $result = new WriteResult($this->savePayloads([$payload]));
+        if (!in_array($serverId, $result->serverIds, true)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Drebedengi setCategoryList response does not confirm category server_id %s.',
+                $serverId,
+            ));
+        }
     }
 
     /**
@@ -438,6 +503,13 @@ final readonly class CategoryService
      */
     private function normalizeIds(array $ids): array
     {
-        return array_map(static fn (int|string $id): string => (string)$id, $ids);
+        $normalized = [];
+
+        foreach ($ids as $id) {
+            $id = (string)DrebedengiNormalizer::positiveIntegerId($id, 'Category ID');
+            $normalized[$id] = $id;
+        }
+
+        return array_values($normalized);
     }
 }

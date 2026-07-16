@@ -9,6 +9,9 @@ use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\Place;
 use Soz\Drebedengi\Model\PlaceNode;
+use Soz\Drebedengi\Model\RecordQuery;
+use Soz\Drebedengi\Model\ReferenceWriteToken;
+use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
 use Soz\Drebedengi\Transport\TransportInterface;
 
@@ -38,9 +41,30 @@ final readonly class PlaceService
             return [];
         }
 
+        $ids = $this->normalizeIds($ids);
+
         return $this->sort(array_map(Place::fromSoap(...), DrebedengiNormalizer::listOfArrays(
-            $this->transport->call('getPlaceList', [$this->normalizeIds($ids)]),
+            $this->transport->call('getPlaceList', [$ids]),
         )));
+    }
+
+    public function find(int|string $id): ?Place
+    {
+        $id = (string)DrebedengiNormalizer::positiveIntegerId($id, 'Place ID');
+
+        foreach ($this->byIds([$id]) as $place) {
+            if ($place->id === $id) {
+                return $place;
+            }
+        }
+
+        return null;
+    }
+
+    public function require(int|string $id): Place
+    {
+        return $this->find($id)
+            ?? throw new InvalidArgumentException(sprintf('Unknown place ID "%s".', (string)$id));
     }
 
     /**
@@ -76,18 +100,58 @@ final readonly class PlaceService
         return $this->buildLevel($places, null, 0);
     }
 
+    public function createAccount(
+        string $name,
+        int|string|null $parentId = null,
+        bool $hidden = true,
+        int|string $sort = 0,
+        int|string|null $iconId = null,
+        ?string $description = null,
+        ?ReferenceWriteToken $writeToken = null,
+    ): Place {
+        $name = $this->normalizeName($name);
+        $parentId = $this->normalizeParentId($parentId);
+        $sort = $this->normalizeIntegerString($sort, 'Place field "sort"');
+        $iconId = $this->normalizeIconId($iconId);
+        $writeToken ??= ReferenceWriteToken::generate();
+
+        $payload = [
+            'client_id' => $writeToken->clientId,
+            'name' => $name,
+            'parent_id' => $parentId,
+            'type' => 4,
+            'is_hidden' => $hidden,
+            'is_for_duty' => false,
+            'sort' => $sort,
+            'purse_of_nuid' => null,
+            'icon_id' => $iconId,
+            'is_autohide' => false,
+            'description' => $description,
+            'is_credit_card' => false,
+        ];
+
+        $result = new WriteResult($this->savePayloads([$payload]), [$payload]);
+        $serverId = $result->serverIdForClientId($writeToken->clientId);
+        if ($serverId === null) {
+            throw new UnexpectedResponseException(
+                'Drebedengi setPlaceList response does not map the created account client_id to server_id.',
+            );
+        }
+
+        return $this->readBackAfterWrite($serverId, sprintf('Created Drebedengi account "%s"', $name));
+    }
+
     /**
      * Updates an account without dropping fields required by setPlaceList.
      * Supported patch fields: name, parent_id, is_hidden, sort, description, icon_id.
      *
      * @param array<string, mixed> $fields
-     * @return list<array<string, mixed>>
      */
-    public function update(string|int $serverId, array $fields): array
+    public function update(string|int $serverId, array $fields): Place
     {
         $serverId = DrebedengiNormalizer::positiveIntegerId($serverId, 'Place ID');
         $patch = $this->normalizeUpdatePatch($fields);
-        $this->assertFullAccessForUpdate();
+        $this->assertFullAccess('updates');
         $place = $this->placeForUpdate((string)$serverId);
 
         if (!$place->isAccount()) {
@@ -129,12 +193,31 @@ final readonly class PlaceService
             'is_credit_card' => $place->creditCard,
         ], $patch);
 
-        return DrebedengiNormalizer::listOfArrays($this->transport->call('setPlaceList', [[$payload]]));
+        $this->confirmExistingWrite($payload, (string)$serverId);
+
+        return $this->readBackAfterWrite((string)$serverId, 'Updated Drebedengi place');
     }
 
+    /**
+     * Deletes only an ordinary empty account.
+     *
+     * The legacy server removes an account's opening-balance row before it
+     * attempts to delete the account and does not wrap those steps in a
+     * transaction. The SDK therefore refuses folders, server-managed accounts
+     * and accounts with visible or planned records. A concurrent record write
+     * between this preflight and deleteObject remains a server-side race.
+     */
     public function delete(string|int $id): bool
     {
         $id = DrebedengiNormalizer::positiveIntegerId($id, 'Place ID');
+        $this->assertFullAccess('deletes');
+        $place = $this->find($id);
+        if (!$place instanceof Place) {
+            return false;
+        }
+        $this->assertSafelyDeletable($place);
+        $this->assertNoRecordsBeforeDelete($place);
+
         $response = $this->transport->call('deleteObject', [$id, DeleteObjectType::Object->value]);
         if (!is_int($response) && !is_string($response)) {
             throw new UnexpectedResponseException(sprintf(
@@ -154,12 +237,32 @@ final readonly class PlaceService
     }
 
     /**
+     * @param list<array<string, mixed>> $payloads
+     * @return list<array<string, mixed>>
+     */
+    public function savePayloads(array $payloads): array
+    {
+        if ($payloads === []) {
+            return [];
+        }
+
+        return DrebedengiNormalizer::listOfArrays($this->transport->call('setPlaceList', [$payloads]));
+    }
+
+    /**
      * @param list<int|string> $ids
      * @return list<string>
      */
     private function normalizeIds(array $ids): array
     {
-        return array_map(static fn (int|string $id): string => (string)$id, $ids);
+        $normalized = [];
+
+        foreach ($ids as $id) {
+            $id = (string)DrebedengiNormalizer::positiveIntegerId($id, 'Place ID');
+            $normalized[$id] = $id;
+        }
+
+        return array_values($normalized);
     }
 
     /**
@@ -186,6 +289,13 @@ final readonly class PlaceService
             'is_autohide',
             'is_credit_card',
         ];
+        $legacyPayload = array_key_exists('id', $fields)
+            && array_key_exists('type', $fields)
+            && array_key_exists('budget_family_id', $fields)
+            && array_key_exists('is_for_duty', $fields)
+            && array_key_exists('purse_of_nuid', $fields)
+            && array_key_exists('is_autohide', $fields)
+            && array_key_exists('is_credit_card', $fields);
         $allowed = array_merge($mutable, $ignored);
         $unsupported = array_values(array_diff(array_keys($fields), $allowed));
         if ($unsupported !== []) {
@@ -205,7 +315,11 @@ final readonly class PlaceService
                     $patch[$field] = $this->normalizeParentId($value);
                     break;
                 case 'is_hidden':
-                    $patch[$field] = $this->normalizeBoolean($value, 'Place field "is_hidden"');
+                    $patch[$field] = $this->normalizeBoolean(
+                        $value,
+                        'Place field "is_hidden"',
+                        $legacyPayload,
+                    );
                     break;
                 case 'sort':
                     $patch[$field] = $this->normalizeIntegerString($value, 'Place field "sort"');
@@ -217,12 +331,7 @@ final readonly class PlaceService
                     $patch[$field] = $value;
                     break;
                 case 'icon_id':
-                    if ($value !== null && !is_int($value) && !is_string($value)) {
-                        throw new InvalidArgumentException('Place field "icon_id" must be a positive integer ID or null.');
-                    }
-                    $patch[$field] = $value === null
-                        ? null
-                        : (string)DrebedengiNormalizer::positiveIntegerId($value, 'Place field "icon_id"');
+                    $patch[$field] = $this->normalizeIconId($value);
                     break;
                 case 'server_id':
                 case 'id':
@@ -245,21 +354,21 @@ final readonly class PlaceService
         return $patch;
     }
 
-    private function assertFullAccessForUpdate(): void
+    private function assertFullAccess(string $operation): void
     {
         if ((new AccountService($this->transport))->rightAccess() !== '0') {
-            throw new InvalidArgumentException(
-                'Drebedengi place updates require full account access; limited access masks required fields.',
-            );
+            throw new InvalidArgumentException(sprintf(
+                'Drebedengi place %s require full account access; limited access masks required fields.',
+                $operation,
+            ));
         }
     }
 
     private function placeForUpdate(string $serverId): Place
     {
-        foreach ($this->byIds([$serverId]) as $place) {
-            if ($place->id === $serverId) {
-                return $place;
-            }
+        $place = $this->find($serverId);
+        if ($place !== null) {
+            return $place;
         }
 
         throw new UnexpectedResponseException(sprintf(
@@ -278,8 +387,27 @@ final readonly class PlaceService
         if ($value === '') {
             throw new InvalidArgumentException('Place name cannot be empty.');
         }
+        $characters = preg_match_all('/./us', $value, $unused);
+        if ($characters === false) {
+            throw new InvalidArgumentException('Place name must be valid UTF-8.');
+        }
+        if ($characters > 128) {
+            throw new InvalidArgumentException('Place name cannot exceed 128 characters.');
+        }
 
         return $value;
+    }
+
+    private function normalizeIconId(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (!is_int($value) && !is_string($value)) {
+            throw new InvalidArgumentException('Place field "icon_id" must be a positive integer ID or null.');
+        }
+
+        return (string)DrebedengiNormalizer::positiveIntegerId($value, 'Place field "icon_id"');
     }
 
     private function normalizeParentId(mixed $value): string
@@ -309,13 +437,20 @@ final readonly class PlaceService
         return trim((string)$value);
     }
 
-    private function normalizeBoolean(mixed $value, string $context): bool
+    private function normalizeBoolean(mixed $value, string $context, bool $allowSoapToken = false): bool
     {
-        try {
-            return DrebedengiNormalizer::bool($value);
-        } catch (UnexpectedResponseException $exception) {
-            throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context), 0, $exception);
+        if (is_bool($value)) {
+            return $value;
         }
+        if ($allowSoapToken) {
+            return match ($value) {
+                1, '1', 't' => true,
+                0, '0', 'f' => false,
+                default => throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context)),
+            };
+        }
+
+        throw new InvalidArgumentException(sprintf('%s must be a boolean.', $context));
     }
 
     /**
@@ -362,6 +497,68 @@ final readonly class PlaceService
     private function decodeSoapHtml(string $value): string
     {
         return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+    }
+
+    private function readBackAfterWrite(string $serverId, string $context): Place
+    {
+        $place = $this->find($serverId);
+        if ($place !== null) {
+            return $place;
+        }
+
+        throw new UnexpectedResponseException(sprintf(
+            '%s was not found by server id %s after write.',
+            $context,
+            $serverId,
+        ));
+    }
+
+    private function assertSafelyDeletable(Place $place): void
+    {
+        if (
+            !$place->isAccount()
+            || $place->forDuty
+            || $place->creditCard
+            || $place->purseOfUserId !== null
+            || $place->autoHide
+        ) {
+            throw new InvalidArgumentException(sprintf(
+                'Drebedengi place %s is not an ordinary account that can be deleted safely.',
+                $place->id,
+            ));
+        }
+    }
+
+    private function assertNoRecordsBeforeDelete(Place $place): void
+    {
+        $params = (new RecordQuery())
+            ->allTime()
+            ->includePlanned()
+            ->onlyPlaces([$place->id])
+            ->toSoapParams();
+        $records = DrebedengiNormalizer::listOfArrays(
+            $this->transport->call('getRecordList', [$params, []]),
+        );
+        if ($records !== []) {
+            throw new InvalidArgumentException(sprintf(
+                'Drebedengi account %s has records and cannot be deleted safely by the non-transactional legacy API.',
+                $place->id,
+            ));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function confirmExistingWrite(array $payload, string $serverId): void
+    {
+        $result = new WriteResult($this->savePayloads([$payload]));
+        if (!in_array($serverId, $result->serverIds, true)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Drebedengi setPlaceList response does not confirm place server_id %s.',
+                $serverId,
+            ));
+        }
     }
 
     /**

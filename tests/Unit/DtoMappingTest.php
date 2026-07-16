@@ -19,6 +19,17 @@ use Soz\Drebedengi\Model\Tag;
 
 final class DtoMappingTest extends TestCase
 {
+    public function testReferenceDtosKeepTheirPre070PositionalConstructors(): void
+    {
+        $category = new Category('1', 'Category', null, null, false, null, []);
+        $source = new Source('2', 'Source', null, null, false, null, []);
+        $tag = new Tag('3', 'Tag', null, null, false, false, null, []);
+
+        self::assertNull($category->description);
+        self::assertNull($source->description);
+        self::assertNull($tag->userId);
+    }
+
     public function testMapsLegacyPlaceFlags(): void
     {
         $place = Place::fromSoap([

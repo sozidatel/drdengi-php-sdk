@@ -29,7 +29,7 @@
     "test:unit": "phpunit --testsuite unit",
     "test:integration": "phpunit --testsuite integration",
     "test:integration:read": "phpunit tests/Integration/LiveReadTest.php",
-    "test:integration:write": "phpunit tests/Integration/LiveRecordWriteTest.php"
+    "test:integration:write": "phpunit tests/Integration/LiveRecordWriteTest.php tests/Integration/LiveReferenceWriteTest.php"
   },
   "config": {
     "sort-packages": true

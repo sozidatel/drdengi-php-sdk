@@ -20,6 +20,7 @@ final readonly class Tag implements \JsonSerializable
         public bool $family,
         public ?string $sort,
         public array $raw,
+        public ?string $userId = null,
     ) {
     }
 
@@ -37,6 +38,7 @@ final readonly class Tag implements \JsonSerializable
             family: DrebedengiNormalizer::bool($raw['is_family'] ?? false),
             sort: DrebedengiNormalizer::nullableId($raw['sort'] ?? null),
             raw: $raw,
+            userId: DrebedengiNormalizer::nullableId($raw['user_id'] ?? $raw['nuid'] ?? null),
         );
     }
 
@@ -46,6 +48,7 @@ final readonly class Tag implements \JsonSerializable
      *     name: string,
      *     parentId: string|null,
      *     familyId: string|null,
+     *     userId: string|null,
      *     hidden: bool,
      *     family: bool,
      *     sort: string|null,
@@ -59,6 +62,7 @@ final readonly class Tag implements \JsonSerializable
             'name' => $this->name,
             'parentId' => $this->parentId,
             'familyId' => $this->familyId,
+            'userId' => $this->userId,
             'hidden' => $this->hidden,
             'family' => $this->family,
             'sort' => $this->sort,

@@ -7,6 +7,7 @@ namespace Soz\Drebedengi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\UnexpectedResponseException;
+use Soz\Drebedengi\Model\ReferenceWriteToken;
 use Soz\Drebedengi\Service\CategoryService;
 use Soz\Drebedengi\Tests\Support\FakeTransport;
 
@@ -85,6 +86,65 @@ final class CategoryServiceTest extends TestCase
         self::assertSame([], $transport->calls);
     }
 
+    public function testByIdsValidatesNormalizesAndDeduplicatesIds(): void
+    {
+        $transport = new FakeTransport([
+            'getCategoryList' => [
+                ['id' => '10', 'parent_id' => '-1', 'name' => 'Food'],
+                ['id' => '20', 'parent_id' => '-1', 'name' => 'Travel'],
+            ],
+        ]);
+
+        $categories = (new CategoryService($transport))->byIds(['10', 10, '20']);
+
+        self::assertSame(['10', '20'], array_map(static fn ($category): string => $category->id, $categories));
+        self::assertSame([['10', '20']], $transport->calls[0]['arguments']);
+    }
+
+    public function testByIdsRejectsInvalidIdBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Category ID');
+
+        try {
+            (new CategoryService($transport))->byIds(['10', '0']);
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testFindAndRequireReturnTypedCategory(): void
+    {
+        $transport = new FakeTransport([
+            'getCategoryList' => [
+                '__sequence' => [
+                    [['id' => '10', 'parent_id' => '-1', 'name' => 'Food']],
+                    [['id' => '10', 'parent_id' => '-1', 'name' => 'Food']],
+                ],
+            ],
+        ]);
+        $service = new CategoryService($transport);
+
+        self::assertSame('10', $service->find('10')?->id);
+        self::assertSame('Food', $service->require(10)->name);
+    }
+
+    public function testFindReturnsNullAndRequireRejectsUnknownCategory(): void
+    {
+        $service = new CategoryService(new FakeTransport([
+            'getCategoryList' => ['__sequence' => [[], []]],
+        ]));
+
+        self::assertNull($service->find('10'));
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown category ID "10"');
+
+        $service->require('10');
+    }
+
     public function testCreatesCategoryViaSetCategoryList(): void
     {
         $transport = new FakeTransport([
@@ -92,31 +152,44 @@ final class CategoryServiceTest extends TestCase
                 ['server_id' => '101', 'client_id' => '123'],
             ],
             'getCategoryList' => [
-                ['id' => '101', 'parent_id' => '10', 'name' => 'Food', 'sort' => '20', 'is_hidden' => 't'],
+                [
+                    'id' => '101',
+                    'parent_id' => '10',
+                    'name' => 'Food',
+                    'sort' => '20',
+                    'is_hidden' => 't',
+                    'description' => 'Daily food',
+                ],
             ],
         ]);
         $service = new CategoryService($transport);
+        $writeToken = ReferenceWriteToken::fromClientId(123);
 
         $category = $service->create(
             name: 'Food',
             parentId: '10',
             hidden: true,
+            sort: 20,
+            description: 'Daily food',
+            writeToken: $writeToken,
         );
 
         self::assertSame('101', $category->id);
         self::assertSame('Food', $category->name);
         self::assertSame('10', $category->parentId);
         self::assertTrue($category->hidden);
+        self::assertSame('Daily food', $category->description);
         self::assertSame('setCategoryList', $transport->calls[0]['method']);
 
         $payload = $transport->mapListArgument(0)[0];
-        self::assertIsInt($payload['client_id']);
+        self::assertSame(123, $payload['client_id']);
         self::assertSame('Food', $payload['name']);
         self::assertSame('10', $payload['parent_id']);
         self::assertSame(3, $payload['type']);
         self::assertTrue($payload['is_hidden']);
         self::assertFalse($payload['is_for_duty']);
-        self::assertSame('0', $payload['sort']);
+        self::assertSame('20', $payload['sort']);
+        self::assertSame('Daily food', $payload['description']);
         self::assertSame('getCategoryList', $transport->calls[1]['method']);
         self::assertSame([['101']], $transport->calls[1]['arguments']);
     }
@@ -124,17 +197,18 @@ final class CategoryServiceTest extends TestCase
     public function testCreateCategoryUsesRootParentByDefault(): void
     {
         $transport = new FakeTransport([
-            'setCategoryList' => [['server_id' => '101']],
+            'setCategoryList' => [['server_id' => '101', 'client_id' => '123']],
             'getCategoryList' => [['id' => '101', 'parent_id' => '-1', 'name' => 'Food']],
         ]);
         $service = new CategoryService($transport);
 
-        $service->create('Food');
+        $service->create('Food', writeToken: ReferenceWriteToken::fromClientId(123));
 
         $payload = $transport->mapListArgument(0)[0];
         self::assertSame('-1', $payload['parent_id']);
         self::assertFalse($payload['is_hidden']);
         self::assertSame('0', $payload['sort']);
+        self::assertNull($payload['description']);
     }
 
     public function testCannotCreateCategoryWithoutName(): void
@@ -148,38 +222,74 @@ final class CategoryServiceTest extends TestCase
 
     public function testCreateCategoryRequiresServerIdInResponse(): void
     {
-        $service = new CategoryService(new FakeTransport(['setCategoryList' => [[]]]));
+        $service = new CategoryService(new FakeTransport([
+            'setCategoryList' => [['client_id' => '123']],
+        ]));
 
         $this->expectException(UnexpectedResponseException::class);
 
-        $service->create('Food');
+        $service->create('Food', writeToken: ReferenceWriteToken::fromClientId(123));
     }
 
     public function testCreateCategoryRequiresCreatedCategoryToBeReadable(): void
     {
         $service = new CategoryService(new FakeTransport([
-            'setCategoryList' => [['server_id' => '101']],
+            'setCategoryList' => [['server_id' => '101', 'client_id' => '123']],
             'getCategoryList' => [],
         ]));
 
         $this->expectException(UnexpectedResponseException::class);
 
-        $service->create('Food');
+        $service->create('Food', writeToken: ReferenceWriteToken::fromClientId(123));
+    }
+
+    public function testCreateCategoryValidatesParentAndNameLengthBeforeSoapCall(): void
+    {
+        $transport = new FakeTransport();
+        $service = new CategoryService($transport);
+
+        try {
+            $service->create('Food', parentId: 0);
+            self::fail('Invalid category parent must be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('parent_id', $exception->getMessage());
+        }
+
+        try {
+            $service->create(str_repeat('x', 129));
+            self::fail('Overlong category name must be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('128 characters', $exception->getMessage());
+        }
+
+        self::assertSame([], $transport->calls);
     }
 
     public function testUpdateReadsCurrentCategoryAndSendsCompletePayload(): void
     {
         $transport = new FakeTransport([
             'getRightAccess' => '0',
-            'getCategoryList' => [[
-                'id' => '10',
-                'parent_id' => '5',
-                'budget_family_id' => '7',
-                'type' => '3',
-                'name' => 'Old name',
-                'is_hidden' => 't',
-                'sort' => '12',
-                'description' => 'Keep this description',
+            'getCategoryList' => ['__sequence' => [
+                [[
+                    'id' => '10',
+                    'parent_id' => '5',
+                    'budget_family_id' => '7',
+                    'type' => '3',
+                    'name' => 'Old name',
+                    'is_hidden' => 't',
+                    'sort' => '12',
+                    'description' => 'Keep this description',
+                ]],
+                [[
+                    'id' => '10',
+                    'parent_id' => '5',
+                    'budget_family_id' => '7',
+                    'type' => '3',
+                    'name' => 'Food',
+                    'is_hidden' => 't',
+                    'sort' => '12',
+                    'description' => 'Keep this description',
+                ]],
             ]],
             'setCategoryList' => [['server_id' => '10', 'status' => 'updated']],
         ]);
@@ -190,11 +300,13 @@ final class CategoryServiceTest extends TestCase
             'name' => '  Food  ',
         ]);
 
-        self::assertSame([['server_id' => '10', 'status' => 'updated']], $result);
+        self::assertSame('10', $result->id);
+        self::assertSame('Food', $result->name);
         self::assertSame('getRightAccess', $transport->calls[0]['method']);
         self::assertSame('getCategoryList', $transport->calls[1]['method']);
         self::assertSame([['10']], $transport->calls[1]['arguments']);
         self::assertSame('setCategoryList', $transport->calls[2]['method']);
+        self::assertSame('getCategoryList', $transport->calls[3]['method']);
         self::assertSame([
             'server_id' => '10',
             'name' => 'Food',
@@ -310,7 +422,7 @@ final class CategoryServiceTest extends TestCase
         $this->expectExceptionMessage('field "is_hidden" must be a boolean');
 
         try {
-            $service->update('10', ['is_hidden' => 'broken']);
+            $service->update('10', ['is_hidden' => 'false']);
         } finally {
             self::assertSame([], $transport->calls);
         }
@@ -337,11 +449,9 @@ final class CategoryServiceTest extends TestCase
             'id' => '10',
             'parent_id' => '5',
             'budget_family_id' => '7',
-            'family_id' => '7',
             'type' => '3',
             'name' => 'A &amp; B',
             'is_hidden' => 't',
-            'is_for_duty' => 'f',
             'sort' => '12',
             'description' => 'x &quot;y&quot; &lt;z&gt; &#039;q&#039;',
         ];
@@ -361,6 +471,25 @@ final class CategoryServiceTest extends TestCase
         self::assertFalse($payload['is_for_duty']);
     }
 
+    public function testUpdateDoesNotTreatPartialPseudoRawPayloadAsLegacyBooleanInput(): void
+    {
+        $transport = new FakeTransport();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('field "is_hidden" must be a boolean');
+
+        try {
+            (new CategoryService($transport))->update('10', [
+                'id' => '10',
+                'budget_family_id' => '7',
+                'type' => '3',
+                'is_hidden' => 't',
+            ]);
+        } finally {
+            self::assertSame([], $transport->calls);
+        }
+    }
+
     public function testUpdateKeepsExplicitlyDifferentHtmlLookingTextLiteral(): void
     {
         $transport = new FakeTransport([
@@ -378,19 +507,56 @@ final class CategoryServiceTest extends TestCase
         self::assertSame('New &amp; literal', $transport->mapListArgument(2)[0]['name']);
     }
 
+    public function testUpdateRequiresResponseToConfirmTargetServerId(): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getCategoryList' => [[
+                'id' => '10',
+                'parent_id' => '-1',
+                'name' => 'Old',
+            ]],
+            'setCategoryList' => [['server_id' => '11']],
+        ]);
+
+        $this->expectException(UnexpectedResponseException::class);
+        $this->expectExceptionMessage('does not confirm category server_id 10');
+
+        (new CategoryService($transport))->update('10', ['name' => 'New']);
+    }
+
     public function testDeletesCategoryAsObject(): void
     {
-        $transport = new FakeTransport(['deleteObject' => 1]);
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getCategoryList' => [['id' => '10', 'parent_id' => '-1', 'name' => 'Food']],
+            'deleteObject' => 1,
+        ]);
         $service = new CategoryService($transport);
 
         self::assertTrue($service->delete('10'));
-        self::assertSame('deleteObject', $transport->calls[0]['method']);
-        self::assertSame([10, 'object'], $transport->calls[0]['arguments']);
+        self::assertSame(['getRightAccess', 'getCategoryList', 'deleteObject'], array_column($transport->calls, 'method'));
+        self::assertSame([10, 'object'], $transport->calls[2]['arguments']);
+    }
+
+    public function testDeleteReturnsFalseWithoutMutationForMissingOrForeignObject(): void
+    {
+        $transport = new FakeTransport([
+            'getRightAccess' => '0',
+            'getCategoryList' => [],
+        ]);
+
+        self::assertFalse((new CategoryService($transport))->delete('10'));
+        self::assertSame(['getRightAccess', 'getCategoryList'], array_column($transport->calls, 'method'));
     }
 
     public function testDeleteRejectsMalformedCategoryResponse(): void
     {
-        $service = new CategoryService(new FakeTransport(['deleteObject' => ['unexpected']]));
+        $service = new CategoryService(new FakeTransport([
+            'getRightAccess' => '0',
+            'getCategoryList' => [['id' => '10', 'parent_id' => '-1', 'name' => 'Food']],
+            'deleteObject' => ['unexpected'],
+        ]));
 
         $this->expectException(UnexpectedResponseException::class);
         $this->expectExceptionMessage('deleteObject response for category must be an integer');
@@ -400,7 +566,11 @@ final class CategoryServiceTest extends TestCase
 
     public function testDeleteRejectsUnknownCategoryStatus(): void
     {
-        $service = new CategoryService(new FakeTransport(['deleteObject' => 2]));
+        $service = new CategoryService(new FakeTransport([
+            'getRightAccess' => '0',
+            'getCategoryList' => [['id' => '10', 'parent_id' => '-1', 'name' => 'Food']],
+            'deleteObject' => 2,
+        ]));
 
         $this->expectException(UnexpectedResponseException::class);
         $this->expectExceptionMessage('must be 0 or 1');
@@ -420,6 +590,20 @@ final class CategoryServiceTest extends TestCase
             $service->delete('not-an-id');
         } finally {
             self::assertSame([], $transport->calls);
+        }
+    }
+
+    public function testDeleteRejectsLimitedAccessBeforeLookup(): void
+    {
+        $transport = new FakeTransport(['getRightAccess' => '1']);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('deletes require full account access');
+
+        try {
+            (new CategoryService($transport))->delete('10');
+        } finally {
+            self::assertSame(['getRightAccess'], array_column($transport->calls, 'method'));
         }
     }
 }

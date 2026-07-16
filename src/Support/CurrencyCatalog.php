@@ -70,6 +70,19 @@ final class CurrencyCatalog
     }
 
     /**
+     * Drops a catalog before a write whose outcome may become ambiguous.
+     *
+     * Unlike a failed explicit refresh(), a write attempt must not preserve the
+     * previous snapshot: the server may apply the mutation even if the client
+     * loses or cannot validate the response.
+     */
+    public function invalidate(): void
+    {
+        $this->currencies = null;
+        $this->byId = null;
+    }
+
+    /**
      * @param list<Currency> $currencies
      * @return array<string, Currency>
      */
