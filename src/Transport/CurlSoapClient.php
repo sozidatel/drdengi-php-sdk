@@ -181,6 +181,9 @@ final class CurlSoapClient extends SoapClient
     {
         $this->requestHeaders = $this->responseHeaders = $this->responseBody = null;
         $this->requestBody = $this->tracing ? $request : null;
+        if ($location === '') {
+            throw new SoapFault('HTTP', 'SOAP HTTP location must not be empty.');
+        }
         self::headerValue($action, 'SOAPAction');
         $contentType = $this->httpContext['content_type'] ?? ($version === SOAP_1_2 ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8');
         $contentType = self::headerValue($contentType, 'http.content_type');
