@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-17
+
+### Исправлено
+
+- `ClientOptions::readTimeout` действительно ограничивает SOAP HTTP-запрос,
+  включая ожидание заголовков и тела ответа. Лимит задаётся на экземпляр клиента
+  с миллисекундной точностью, без изменения глобальных настроек PHP.
+- Raw stream context с TLS или заголовками больше не теряет типизированный
+  timeout, если собственный `http.timeout` не задан.
+
+### Изменено
+
+- Для HTTP-запросов с включённым timeout используется cURL; добавлено требование
+  `ext-curl`. SOAP-сериализация и загрузка WSDL остаются в native `SoapClient`.
+- `readTimeout` означает общий лимит одного SOAP HTTP-запроса, включая
+  подключение. WSDL и дополнительные SOAP-вызовы имеют отдельные лимиты.
+- `readTimeout: null` без raw `http.timeout` сохраняет прежний native транспорт.
+  Неподдерживаемые настройки cURL-режима отклоняются явно до сетевого запроса;
+  HTTP redirects в этом режиме не выполняются.
+
 ## [0.7.1] - 2026-09-17
 
 ### Исправлено
@@ -171,7 +191,8 @@
 - Чтение истории отделено от state-changing первоначальной синхронизации.
 - Ответы финансовых и справочных методов валидируются на границе SOAP.
 
-[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.5.1...v0.6.0

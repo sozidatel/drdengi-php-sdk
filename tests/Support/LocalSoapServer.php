@@ -14,10 +14,10 @@ final class LocalSoapServer
     /** @var array<int, resource> */
     private array $pipes = [];
 
-    public function __construct()
+    public function __construct(string $fixture = 'soap-server.php')
     {
         $process = proc_open(
-            [PHP_BINARY, __DIR__ . '/../Fixtures/soap-server.php'],
+            [PHP_BINARY, __DIR__ . '/../Fixtures/' . $fixture],
             [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']],
             $pipes,
             env_vars: [],

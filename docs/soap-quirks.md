@@ -4,14 +4,15 @@
 
 ## Endpoint
 
-Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены. По умолчанию используется только `Endpoint::RU_BASE_URI`; зеркало ME или последовательность failover нужно указывать явно. `location` и `exceptions` зарезервированы транспортом и не могут быть переопределены через caller-provided `soapOptions`; остальные SOAP options сохраняются.
+Официальный WSDL доступен по `/soap/dd.wsdl`, но внутри содержит `soap:address` на `http://www.drebedengi.ru/soap/`. SDK всегда задает `location` из `Endpoint`, чтобы работали `drebedengi.me` и кастомные домены. По умолчанию используется только `Endpoint::RU_BASE_URI`; зеркало ME или последовательность failover нужно указывать явно. `location` и `exceptions` зарезервированы транспортом и не могут быть переопределены через caller-provided `soapOptions`. Настройки SOAP-кодека сохраняются; поддержка HTTP-настроек зависит от выбранного транспорта.
 
-`ClientOptions` задаёт connect timeout 10 секунд, HTTP stream-context timeout
-30 секунд и WSDL memory cache. В native PHP `SoapClient` этот stream-context
-timeout не ограничивает ожидание SOAP-ответа: применяется
-`default_socket_timeout` окружения. SDK глобальную настройку не меняет.
-Raw `soapOptions` имеют приоритет, чтобы сохранить совместимость и escape hatch
-для нестандартного окружения.
+`ClientOptions` задаёт connect timeout 10 секунд, общий лимит SOAP HTTP-запроса
+30 секунд и WSDL memory cache. При включённом timeout SOAP XML обрабатывает
+native `SoapClient`, а HTTP выполняется через cURL. Только
+`readTimeout: null` без raw `http.timeout` сохраняет прежний native транспорт,
+в котором ожидание зависит от `default_socket_timeout` окружения. SDK эту
+глобальную настройку не меняет. Приоритет raw options и поддерживаемые
+HTTP-настройки описаны в [контракте транспорта](transport.md).
 
 Точные ошибки native SOAP-парсера для повреждённого XML или отсутствующего
 Envelope/Body считаются инфраструктурными: для чтения допустим failover, для

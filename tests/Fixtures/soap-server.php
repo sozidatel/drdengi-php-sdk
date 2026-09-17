@@ -40,20 +40,26 @@ while (($connection = @stream_socket_accept($listener, -1)) !== false) {
     }
 
     $status = '200 OK';
+    $scenario = explode('/', $path)[1] ?? '';
+    $delayHeaders = false;
+    $delayBody = false;
     if ($path === '/requests') {
         $body = json_encode($requests, JSON_THROW_ON_ERROR);
     } elseif (str_ends_with($path, '/soap/dd.wsdl')) {
+        $delayHeaders = $scenario === 'delay-wsdl-headers';
+        $delayBody = $scenario === 'delay-wsdl-body';
         $body = file_get_contents(__DIR__ . '/transport.wsdl');
         if ($body === false) {
             exit(1);
         }
     } else {
         $requests[] = $path;
-        $scenario = explode('/', $path)[1] ?? '';
         $method = str_contains($requestBody, ':setRecordList') ? 'setRecordList' : 'getAccessStatus';
         if (str_starts_with($scenario, 'mutation-')) {
             $scenario = $method === 'setRecordList' ? substr($scenario, strlen('mutation-')) : 'success';
         }
+        $delayHeaders = $scenario === 'delay-headers';
+        $delayBody = $scenario === 'delay-body';
         $success = '<' . $method . 'Response><return xsi:type="xsd:string">1</return></' . $method . 'Response>';
         $body = match ($scenario) {
             'non-xml' => '<html><body>Proxy error</body></html>',
@@ -75,9 +81,21 @@ while (($connection = @stream_socket_accept($listener, -1)) !== false) {
         }
     }
 
-    $response = "HTTP/1.1 {$status}\r\nContent-Type: text/xml; charset=utf-8\r\n"
-        . 'Content-Length: ' . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body;
-    @fwrite($connection, $response);
+    if ($delayHeaders) {
+        usleep(600_000);
+    }
+    $headers = "HTTP/1.1 {$status}\r\nContent-Type: text/xml; charset=utf-8\r\n"
+        . 'Content-Length: ' . strlen($body) . "\r\nConnection: close\r\n\r\n";
+    if ($delayBody) {
+        // Send a partial body before stalling to check that the response
+        // timeout also covers the body after HTTP headers have arrived.
+        $split = intdiv(strlen($body), 2);
+        @fwrite($connection, $headers . substr($body, 0, $split));
+        usleep(600_000);
+        @fwrite($connection, substr($body, $split));
+    } else {
+        @fwrite($connection, $headers . $body);
+    }
     fclose($connection);
 }
 fclose($listener);

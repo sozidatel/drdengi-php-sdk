@@ -13,6 +13,11 @@ final readonly class ClientOptions
 
     public \DateTimeZone $timezone;
 
+    /**
+     * @param float|null $readTimeout Total timeout for one SOAP HTTP request in
+     *     seconds, including connection and response, rounded up to milliseconds.
+     *     Null selects native HTTP unless a raw context timeout overrides it.
+     */
     public function __construct(
         ?\DateTimeZone $timezone = null,
         public ?int $connectTimeout = self::DEFAULT_CONNECT_TIMEOUT,

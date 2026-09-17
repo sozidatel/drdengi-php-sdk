@@ -11,6 +11,7 @@ use Soz\Drebedengi\Credentials;
 use Soz\Drebedengi\Endpoint;
 use Soz\Drebedengi\Exception\AmbiguousMutationException;
 use Soz\Drebedengi\Exception\EndpointUnavailableException;
+use Soz\Drebedengi\Exception\InvalidArgumentException;
 use Soz\Drebedengi\Exception\SoapFaultException;
 
 final class SoapTransport implements TransportInterface
@@ -85,9 +86,12 @@ final class SoapTransport implements TransportInterface
         }
 
         $options = $this->clientOptions();
+        $readTimeout = $this->effectiveReadTimeout($options);
 
         try {
-            $this->client = new SoapClient($this->endpoint->wsdlUri(), $options);
+            $this->client = $readTimeout === null
+                ? new SoapClient($this->endpoint->wsdlUri(), $options)
+                : new CurlSoapClient($this->endpoint->wsdlUri(), $options, $readTimeout);
         } catch (SoapFault $exception) {
             throw new EndpointUnavailableException(
                 message: $this->sanitize(sprintf(
@@ -122,7 +126,7 @@ final class SoapTransport implements TransportInterface
             ]);
         }
 
-        return array_replace(
+        $options = array_replace(
             [
                 'exceptions' => true,
                 'trace' => false,
@@ -140,6 +144,60 @@ final class SoapTransport implements TransportInterface
                 'location' => $this->endpoint->soapLocation(),
             ],
         );
+
+        // A TLS/header-only raw context must not discard the typed timeout.
+        // Clone the context so WSDL loading sees the limit too, without changing
+        // a resource that the caller may share with other clients.
+        $context = $options['stream_context'] ?? null;
+        if ($this->options->readTimeout !== null && $context === null) {
+            $options['stream_context'] = stream_context_create([
+                'http' => ['timeout' => $this->options->readTimeout],
+            ]);
+        } elseif ($this->options->readTimeout !== null
+            && is_resource($context)
+            && get_resource_type($context) === 'stream-context') {
+            $contextOptions = stream_context_get_options($context);
+            $httpOptions = $contextOptions['http'] ?? [];
+            if (!is_array($httpOptions)) {
+                throw new InvalidArgumentException('SOAP HTTP context options must be an array.');
+            }
+            if (!array_key_exists('timeout', $httpOptions)) {
+                $httpOptions['timeout'] = $this->options->readTimeout;
+                $contextOptions['http'] = $httpOptions;
+                $params = stream_context_get_params($context);
+                unset($params['options']);
+                $options['stream_context'] = stream_context_create($contextOptions, $params);
+            }
+        }
+
+        return $options;
+    }
+
+    /** @param array<string, mixed> $options */
+    private function effectiveReadTimeout(array $options): ?float
+    {
+        $context = $options['stream_context'] ?? null;
+        if (is_resource($context) && get_resource_type($context) === 'stream-context') {
+            $contextOptions = stream_context_get_options($context);
+            $httpOptions = $contextOptions['http'] ?? [];
+            if (!is_array($httpOptions)) {
+                throw new InvalidArgumentException('SOAP HTTP context options must be an array.');
+            }
+            if (array_key_exists('timeout', $httpOptions)) {
+                $timeout = $httpOptions['timeout'];
+                if (!is_int($timeout) && !is_float($timeout) && !(is_string($timeout) && is_numeric($timeout))) {
+                    throw new InvalidArgumentException('HTTP context timeout must be a finite positive number of seconds.');
+                }
+                $timeout = (float)$timeout;
+                if (!is_finite($timeout) || $timeout <= 0) {
+                    throw new InvalidArgumentException('HTTP context timeout must be a finite positive number of seconds.');
+                }
+
+                return $timeout;
+            }
+        }
+
+        return $this->options->readTimeout;
     }
 
     private function faultCode(SoapFault $exception): ?string
