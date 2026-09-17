@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-18
+
+### Добавлено
+
+- Неизменяемый `PreparedRecordWrite`: окончательные SOAP-строки и точные суммы
+  для предварительного просмотра, версионированное сохранение и восстановление
+  через JSON без credentials.
+- `prepareExpense()`, `prepareIncome()`, `prepareTransfer()`,
+  `prepareExchange()` и `prepareExpenseGroup()` подготавливают операции без
+  финансовой записи; `submit()` отправляет сохранённый запрос с существующей
+  проверкой подтверждений и без автоматического повтора.
+- Существующие `create*()` используют тот же путь подготовки и отправки,
+  сохраняя аргументы, SOAP-данные, результаты, исключения и поведение пустых
+  групп. Методы обновления, удаления и raw-записи не меняются.
+
 ## [0.8.0] - 2026-09-17
 
 ### Исправлено
@@ -191,7 +206,8 @@
 - Чтение истории отделено от state-changing первоначальной синхронизации.
 - Ответы финансовых и справочных методов валидируются на границе SOAP.
 
-[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sozidatel/drdengi-php-sdk/compare/v0.6.0...v0.7.0

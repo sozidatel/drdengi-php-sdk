@@ -14,6 +14,7 @@ use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\ExpenseGroupItem;
 use Soz\Drebedengi\Model\MoneyAmount;
 use Soz\Drebedengi\Model\OperationType;
+use Soz\Drebedengi\Model\PreparedRecordWrite;
 use Soz\Drebedengi\Model\Record;
 use Soz\Drebedengi\Model\RecordPatch;
 use Soz\Drebedengi\Model\RecordQuery;
@@ -94,9 +95,21 @@ final readonly class RecordService
         string $comment = '',
         ?RecordWriteToken $writeToken = null,
     ): WriteResult {
+        return $this->submit($this->prepareExpense($placeId, $categoryId, $amount, $currencyId, $date, $comment, $writeToken));
+    }
+
+    public function prepareExpense(
+        int|string $placeId,
+        int|string $categoryId,
+        MoneyAmount $amount,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+        string $comment = '',
+        ?RecordWriteToken $writeToken = null,
+    ): PreparedRecordWrite {
         $writeToken = $this->writeToken($writeToken, 1, 'Creating an expense');
 
-        return $this->writePayloads([
+        return new PreparedRecordWrite([
             $this->expensePayload(
                 $placeId,
                 $categoryId,
@@ -106,7 +119,7 @@ final readonly class RecordService
                 $comment,
                 $writeToken->clientId(),
             ),
-        ]);
+        ], [$amount->scale]);
     }
 
     /**
@@ -119,16 +132,29 @@ final readonly class RecordService
         \DateTimeInterface $date,
         ?RecordWriteToken $writeToken = null,
     ): WriteResult {
+        return $this->submit($this->prepareExpenseGroup($placeId, $items, $currencyId, $date, $writeToken));
+    }
+
+    /**
+     * @param list<ExpenseGroupItem|array{categoryId: int|string, amount: MoneyAmount, comment?: string}> $items
+     */
+    public function prepareExpenseGroup(
+        int|string $placeId,
+        array $items,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+        ?RecordWriteToken $writeToken = null,
+    ): PreparedRecordWrite {
         $items = array_map($this->normalizeExpenseGroupItem(...), $items);
         if ($items === []) {
-            return WriteResult::empty();
+            return new PreparedRecordWrite([], []);
         }
 
         $writeToken = $this->writeToken($writeToken, count($items), 'Creating an expense group');
         if (count($items) === 1) {
             $item = $items[0];
 
-            return $this->createExpense(
+            return $this->prepareExpense(
                 placeId: $placeId,
                 categoryId: $item->categoryId,
                 amount: $item->amount,
@@ -155,7 +181,7 @@ final readonly class RecordService
             $payloads[] = $payload;
         }
 
-        return $this->writePayloads($payloads);
+        return new PreparedRecordWrite($payloads, array_map(static fn (ExpenseGroupItem $item): int => $item->amount->scale, $items));
     }
 
     public function createIncome(
@@ -167,11 +193,23 @@ final readonly class RecordService
         string $comment = '',
         ?RecordWriteToken $writeToken = null,
     ): WriteResult {
+        return $this->submit($this->prepareIncome($placeId, $sourceId, $amount, $currencyId, $date, $comment, $writeToken));
+    }
+
+    public function prepareIncome(
+        int|string $placeId,
+        int|string $sourceId,
+        MoneyAmount $amount,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+        string $comment = '',
+        ?RecordWriteToken $writeToken = null,
+    ): PreparedRecordWrite {
         $this->assertAmountMatchesCurrency($amount, $currencyId);
         $writeToken = $this->writeToken($writeToken, 1, 'Creating an income');
         $minorUnits = $amount->absolute()->minorUnits;
 
-        return $this->writePayloads([[
+        return new PreparedRecordWrite([[
             'client_id' => $writeToken->clientId(),
             'place_id' => (string)$placeId,
             'budget_object_id' => (string)$sourceId,
@@ -181,7 +219,7 @@ final readonly class RecordService
             'currency_id' => (string)$currencyId,
             'is_duty' => false,
             'operation_type' => OperationType::Income->value,
-        ]]);
+        ]], [$amount->scale]);
     }
 
     public function createTransfer(
@@ -193,6 +231,18 @@ final readonly class RecordService
         string $comment = '',
         ?RecordWriteToken $writeToken = null,
     ): WriteResult {
+        return $this->submit($this->prepareTransfer($fromPlaceId, $toPlaceId, $amount, $currencyId, $date, $comment, $writeToken));
+    }
+
+    public function prepareTransfer(
+        int|string $fromPlaceId,
+        int|string $toPlaceId,
+        MoneyAmount $amount,
+        int|string $currencyId,
+        \DateTimeInterface $date,
+        string $comment = '',
+        ?RecordWriteToken $writeToken = null,
+    ): PreparedRecordWrite {
         $fromPlaceId = DrebedengiNormalizer::positiveIntegerId($fromPlaceId, 'Transfer source place ID');
         $toPlaceId = DrebedengiNormalizer::positiveIntegerId($toPlaceId, 'Transfer destination place ID');
         if ($fromPlaceId === $toPlaceId) {
@@ -206,7 +256,7 @@ final readonly class RecordService
         $fromClientId = $writeToken->clientId(0);
         $toClientId = $writeToken->clientId(1);
 
-        return $this->writePayloads([
+        return new PreparedRecordWrite([
             [
                 'client_id' => $fromClientId,
                 'client_move_id' => $toClientId,
@@ -231,7 +281,7 @@ final readonly class RecordService
                 'is_duty' => false,
                 'operation_type' => OperationType::Transfer->value,
             ],
-        ]);
+        ], [$amount->scale, $amount->scale]);
     }
 
     public function createExchange(
@@ -244,6 +294,19 @@ final readonly class RecordService
         string $comment = '',
         ?RecordWriteToken $writeToken = null,
     ): WriteResult {
+        return $this->submit($this->prepareExchange($placeId, $soldAmount, $soldCurrencyId, $boughtAmount, $boughtCurrencyId, $date, $comment, $writeToken));
+    }
+
+    public function prepareExchange(
+        int|string $placeId,
+        MoneyAmount $soldAmount,
+        int|string $soldCurrencyId,
+        MoneyAmount $boughtAmount,
+        int|string $boughtCurrencyId,
+        \DateTimeInterface $date,
+        string $comment = '',
+        ?RecordWriteToken $writeToken = null,
+    ): PreparedRecordWrite {
         if ((string)$soldCurrencyId === (string)$boughtCurrencyId) {
             throw new InvalidArgumentException('Currency exchange requires two different currency ids.');
         }
@@ -257,7 +320,7 @@ final readonly class RecordService
         $soldClientId = $writeToken->clientId(0);
         $boughtClientId = $writeToken->clientId(1);
 
-        return $this->writePayloads([
+        return new PreparedRecordWrite([
             [
                 'client_id' => $soldClientId,
                 'client_change_id' => $boughtClientId,
@@ -282,7 +345,21 @@ final readonly class RecordService
                 'is_duty' => false,
                 'operation_type' => OperationType::Exchange->value,
             ],
-        ]);
+        ], [$soldAmount->scale, $boughtAmount->scale]);
+    }
+
+    /**
+     * Sends the captured payload once, without rebuilding it or retrying.
+     * The caller must select the intended account and retain the prepared write
+     * for reconciliation if the response is lost or incomplete.
+     */
+    public function submit(PreparedRecordWrite $prepared): WriteResult
+    {
+        if (count($prepared) === 0) {
+            return WriteResult::empty();
+        }
+
+        return $this->writePayloads($prepared->payloads);
     }
 
     public function update(Record $record, ?RecordPatch $patch = null): WriteResult

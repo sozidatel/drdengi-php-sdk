@@ -550,6 +550,47 @@ $amount = $btc->amount('0.00001234');
 `createTransfer()` и `createExchange()` сами создают парные записи и связывают их через `client_move_id` / `client_change_id`.
 Перевод на тот же самый счёт SDK отклоняет до SOAP-вызова.
 
+### Подготовка записи до отправки
+
+Для предварительного просмотра, сохранения и последующей отправки доступны
+`prepareExpense()`, `prepareIncome()`, `prepareTransfer()`, `prepareExchange()`
+и `prepareExpenseGroup()`. Аргументы совпадают с соответствующими `create*()`.
+Подготовка может прочитать справочник валют, но не создаёт финансовых записей.
+
+```php
+use Soz\Drebedengi\Model\PreparedRecordWrite;
+
+$prepared = $client->records()->prepareExpense(
+    placeId: 'PLACE_ID',
+    categoryId: 'CATEGORY_ID',
+    amount: $currency->amount('12.34'),
+    currencyId: $currency->id,
+    date: new DateTimeImmutable(),
+    comment: 'Обед',
+);
+
+// Окончательные строки запроса и точные суммы для предварительного просмотра.
+$rows = $prepared->payloads;
+$signedAmount = $prepared->amounts[0]->toDecimalString(); // '-12.34'
+$json = $prepared->toJson(); // Приложение сохраняет его до отправки.
+
+// Позже, после проверки, с клиентом того же аккаунта:
+$restored = PreparedRecordWrite::fromJson($json);
+$result = $client->records()->submit($restored);
+```
+
+`submit()` отправляет сохранённые строки без пересчёта даты, сумм и IDs и
+возвращает прежний `WriteResult`. Неполное подтверждение и транспортные ошибки
+обрабатываются как в `create*()`, без автоматических повторов. Сами `create*()`
+сохраняют сигнатуры и поведение и выполняют подготовку с немедленной отправкой.
+Пустая группа остаётся операцией без сетевой записи.
+
+Сохранённый объект не содержит credentials и не привязан к аккаунту;
+правильный клиент выбирает приложение. Восстановление JSON не подтверждает
+актуальность справочников или отсутствие предыдущей записи. Ограничения
+дедупликации токена сохраняются. Подробности:
+[подготовленные операции](docs/prepared-records.md).
+
 ## Обновление и удаление
 
 ```php
