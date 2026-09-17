@@ -16,6 +16,11 @@ final class ReportQuery
         $this->records = (new RecordQuery())->thisMonth();
     }
 
+    public function __clone(): void
+    {
+        $this->records = clone $this->records;
+    }
+
     public static function forDateRange(\DateTimeInterface $from, \DateTimeInterface $to): self
     {
         return (new self())->dateRange($from, $to);

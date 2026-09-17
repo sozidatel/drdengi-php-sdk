@@ -7,7 +7,7 @@ namespace Soz\Drebedengi\Exception;
 /**
  * The request may have reached Drebedengi, so repeating it can duplicate data.
  */
-final class AmbiguousMutationException extends EndpointUnavailableException
+class AmbiguousMutationException extends EndpointUnavailableException
 {
     public function __construct(
         string $message = '',

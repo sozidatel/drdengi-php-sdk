@@ -13,6 +13,7 @@ use Soz\Drebedengi\Model\DeleteObjectType;
 use Soz\Drebedengi\Model\ReferenceWriteToken;
 use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
+use Soz\Drebedengi\Support\ReferenceText;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class CategoryService
@@ -139,17 +140,21 @@ final readonly class CategoryService
     public function update(string|int $serverId, array $fields): Category
     {
         $serverId = DrebedengiNormalizer::positiveIntegerId($serverId, 'Category ID');
-        $patch = $this->normalizeUpdatePatch($fields);
+        $this->normalizeUpdatePatch($fields, allowPossibleEcho: true);
         $this->assertFullAccess('updates');
         $category = $this->categoryForUpdate((string)$serverId);
 
         $rawName = $this->nullableRawString($category->raw, 'name', 'category') ?? $category->name;
         $rawDescription = $this->nullableRawString($category->raw, 'description', 'category');
-        $patch = $this->decodeEchoedTextPatch($patch, $category->raw, 'category');
+        $patch = $this->normalizeUpdatePatch(ReferenceText::decodeEchoedFields(
+            $fields,
+            $category->raw,
+            ['name', 'description'],
+        ));
 
         $payload = array_replace([
             'server_id' => (string)$serverId,
-            'name' => $this->decodeSoapHtml($rawName),
+            'name' => ReferenceText::decodeSoapHtml($rawName),
             'parent_id' => $category->parentId ?? '-1',
             // getCategoryList exposes only expense categories; setCategoryList fixes type=3,
             // while is_for_duty is Place-only state but remains required by the legacy DAO payload.
@@ -157,7 +162,7 @@ final readonly class CategoryService
             'is_hidden' => $category->hidden,
             'is_for_duty' => false,
             'sort' => $category->sort ?? '0',
-            'description' => $rawDescription === null ? null : $this->decodeSoapHtml($rawDescription),
+            'description' => $rawDescription === null ? null : ReferenceText::decodeSoapHtml($rawDescription),
         ], $patch);
 
         $this->confirmExistingWrite($payload, (string)$serverId);
@@ -260,7 +265,7 @@ final readonly class CategoryService
      * @param array<string, mixed> $fields
      * @return array<string, bool|string|null>
      */
-    private function normalizeUpdatePatch(array $fields): array
+    private function normalizeUpdatePatch(array $fields, bool $allowPossibleEcho = false): array
     {
         if ($fields === []) {
             throw new InvalidArgumentException('Cannot update a Drebedengi category without fields.');
@@ -291,7 +296,7 @@ final readonly class CategoryService
         foreach ($fields as $field => $value) {
             switch ($field) {
                 case 'name':
-                    $patch[$field] = $this->normalizeName($value, 'Category name');
+                    $patch[$field] = $this->normalizeName($value, 'Category name', $allowPossibleEcho);
                     break;
                 case 'parent_id':
                     $patch[$field] = $this->normalizeParentId($value);
@@ -355,25 +360,9 @@ final readonly class CategoryService
         ));
     }
 
-    private function normalizeName(mixed $value, string $context): string
+    private function normalizeName(mixed $value, string $context, bool $allowPossibleEcho = false): string
     {
-        if (!is_string($value)) {
-            throw new InvalidArgumentException(sprintf('%s must be a string.', $context));
-        }
-
-        $value = trim($value);
-        if ($value === '') {
-            throw new InvalidArgumentException(sprintf('%s cannot be empty.', $context));
-        }
-        $characters = preg_match_all('/./us', $value, $unused);
-        if ($characters === false) {
-            throw new InvalidArgumentException(sprintf('%s must be valid UTF-8.', $context));
-        }
-        if ($characters > 128) {
-            throw new InvalidArgumentException(sprintf('%s cannot exceed 128 characters.', $context));
-        }
-
-        return $value;
+        return ReferenceText::normalize($value, $context, 128, allowPossibleEcho: $allowPossibleEcho);
     }
 
     private function normalizeParentId(mixed $value): string
@@ -436,37 +425,6 @@ final readonly class CategoryService
         }
 
         return (string)$raw[$field];
-    }
-
-    /**
-     * getCategoryList HTML-escapes text. A complete legacy payload often echoes
-     * those exact values back into update(); decode that echo once so the server
-     * cannot escape it a second time. Explicitly different values stay literal.
-     *
-     * @param array<string, bool|string|null> $patch
-     * @param array<string, mixed> $raw
-     * @return array<string, bool|string|null>
-     */
-    private function decodeEchoedTextPatch(array $patch, array $raw, string $context): array
-    {
-        foreach (['name', 'description'] as $field) {
-            $value = $patch[$field] ?? null;
-            if (!is_string($value)) {
-                continue;
-            }
-
-            $rawValue = $this->nullableRawString($raw, $field, $context);
-            if ($rawValue !== null && $value === $rawValue) {
-                $patch[$field] = $this->decodeSoapHtml($value);
-            }
-        }
-
-        return $patch;
-    }
-
-    private function decodeSoapHtml(string $value): string
-    {
-        return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
     private function readBackAfterWrite(string $serverId, string $context): Category

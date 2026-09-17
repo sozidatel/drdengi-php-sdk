@@ -37,6 +37,8 @@ final readonly class Place implements \JsonSerializable
      */
     public static function fromSoap(array $raw): self
     {
+        $sort = DrebedengiNormalizer::string($raw['sort'] ?? '');
+
         return new self(
             id: DrebedengiNormalizer::requiredString($raw, 'id', 'place'),
             name: DrebedengiNormalizer::requiredString($raw, 'name', 'place'),
@@ -48,7 +50,7 @@ final readonly class Place implements \JsonSerializable
             forDuty: DrebedengiNormalizer::bool($raw['is_for_duty'] ?? false),
             description: DrebedengiNormalizer::nullableText($raw['description'] ?? null),
             iconId: DrebedengiNormalizer::nullableId($raw['icon_id'] ?? null),
-            sort: DrebedengiNormalizer::nullableId($raw['sort'] ?? null),
+            sort: $sort === '' ? null : $sort,
             purseOfUserId: DrebedengiNormalizer::nullableId($raw['purse_of_nuid'] ?? null),
             autoHide: DrebedengiNormalizer::bool($raw['is_autohide'] ?? false),
             creditCard: DrebedengiNormalizer::bool($raw['is_credit_card'] ?? false),

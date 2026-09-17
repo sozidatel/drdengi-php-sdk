@@ -6,6 +6,7 @@ namespace Soz\Drebedengi\Service;
 
 use Soz\Drebedengi\ClientOptions;
 use Soz\Drebedengi\Exception\InvalidArgumentException;
+use Soz\Drebedengi\Exception\UnconfirmedWriteException;
 use Soz\Drebedengi\Exception\UnexpectedResponseException;
 use Soz\Drebedengi\Model\BalanceItem;
 use Soz\Drebedengi\Model\Currency;
@@ -358,7 +359,56 @@ final readonly class RecordService
      */
     private function writePayloads(array $payloads): WriteResult
     {
-        return new WriteResult($this->savePayloads($payloads), $payloads);
+        $response = $this->transport->call('setRecordList', [$payloads]);
+
+        try {
+            $rows = DrebedengiNormalizer::listOfArrays($response);
+            $this->assertCreatedRecordsConfirmed($rows, $payloads);
+
+            return new WriteResult($rows, $payloads);
+        } catch (UnexpectedResponseException $exception) {
+            throw new UnconfirmedWriteException($payloads, $response, $exception);
+        }
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @param list<array<string, mixed>> $payloads
+     */
+    private function assertCreatedRecordsConfirmed(array $rows, array $payloads): void
+    {
+        $creates = array_values(array_filter(
+            $payloads,
+            static fn (array $payload): bool => !array_key_exists('server_id', $payload),
+        ));
+        if ($creates === []) {
+            // Legacy updates need not return client/server mappings.
+            return;
+        }
+
+        $clientIds = (new WriteResult([], $creates))->clientIds;
+        if (count($rows) !== count($clientIds)) {
+            throw new UnexpectedResponseException('Record create response does not confirm every submitted record.');
+        }
+
+        $seenServerIds = [];
+        $seenClientIds = [];
+        foreach ($rows as $row) {
+            $result = new WriteResult([$row]);
+            $serverId = $result->firstServerId();
+            if ($serverId === null || isset($seenServerIds[ltrim($serverId, '0')])) {
+                throw new UnexpectedResponseException('Record create response must contain distinct server IDs.');
+            }
+            $seenServerIds[ltrim($serverId, '0')] = true;
+
+            $clientId = $result->clientIds[0] ?? null;
+            if ($clientId !== null) {
+                if (!in_array($clientId, $clientIds, true) || isset($seenClientIds[$clientId])) {
+                    throw new UnexpectedResponseException('Record create response contains an unexpected or repeated client ID.');
+                }
+                $seenClientIds[$clientId] = true;
+            }
+        }
     }
 
     private function writeToken(
@@ -403,6 +453,8 @@ final readonly class RecordService
             'restDate' => $to,
             'is_with_accum' => false,
             'is_with_duty' => false,
+            'is_with_hidden' => true,
+            'is_with_null' => true,
         ]])) as $balance) {
             $item = BalanceItem::fromSoap($balance);
             $this->currencyFromResponse($item->currencyId, 'Balance');
@@ -465,6 +517,7 @@ final readonly class RecordService
     private function canReuseRowsForBalance(array $params): bool
     {
         return $params['r_period'] === 0
+            && $params['is_show_duty']
             && $params['r_what'] === OperationType::All->value
             && $params['r_who'] === 0
             && ($params['r_currency'] === 0 || $params['r_currency'] === '0')

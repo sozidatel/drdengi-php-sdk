@@ -160,6 +160,22 @@ final class SoapTransport implements TransportInterface
             return true;
         }
 
+        // These are response-parser errors emitted by ext-soap itself. A reply
+        // that cannot be read as a SOAP envelope does not tell us whether a
+        // mutation was applied. Do not classify every Client fault this way:
+        // valid application faults must still stop endpoint failover.
+        if (in_array($faultCode, ['CLIENT', 'SENDER'], true)
+            && in_array($exception->getMessage(), [
+                'looks like we got no XML document',
+                'looks like we got XML without "Envelope" element',
+                'Body must be present in a SOAP envelope',
+            ], true)) {
+            return true;
+        }
+        if ($faultCode === 'VERSIONMISMATCH' && $exception->getMessage() === 'Wrong Version') {
+            return true;
+        }
+
         // Drebedengi can report its own upstream timeout as a generic Server
         // SOAP fault, so the fault code alone cannot distinguish it from a
         // business error. Keep this exception deliberately exact and narrow.

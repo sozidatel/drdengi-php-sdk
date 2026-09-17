@@ -13,6 +13,7 @@ use Soz\Drebedengi\Model\RecordQuery;
 use Soz\Drebedengi\Model\ReferenceWriteToken;
 use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
+use Soz\Drebedengi\Support\ReferenceText;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class PlaceService
@@ -150,7 +151,7 @@ final readonly class PlaceService
     public function update(string|int $serverId, array $fields): Place
     {
         $serverId = DrebedengiNormalizer::positiveIntegerId($serverId, 'Place ID');
-        $patch = $this->normalizeUpdatePatch($fields);
+        $this->normalizeUpdatePatch($fields, allowPossibleEcho: true);
         $this->assertFullAccess('updates');
         $place = $this->placeForUpdate((string)$serverId);
 
@@ -176,11 +177,15 @@ final readonly class PlaceService
 
         $rawName = $this->nullableRawString($place->raw, 'name', 'place') ?? $place->name;
         $rawDescription = $this->nullableRawString($place->raw, 'description', 'place');
-        $patch = $this->decodeEchoedTextPatch($patch, $place->raw, 'place');
+        $patch = $this->normalizeUpdatePatch(ReferenceText::decodeEchoedFields(
+            $fields,
+            $place->raw,
+            ['name', 'description'],
+        ));
 
         $payload = array_replace([
             'server_id' => (string)$serverId,
-            'name' => $this->decodeSoapHtml($rawName),
+            'name' => ReferenceText::decodeSoapHtml($rawName),
             'parent_id' => $place->parentId ?? $place->systemParentId ?? '-1',
             'type' => $place->type->value,
             'is_hidden' => $place->hidden,
@@ -189,7 +194,7 @@ final readonly class PlaceService
             'purse_of_nuid' => $place->purseOfUserId,
             'icon_id' => $place->iconId,
             'is_autohide' => $place->autoHide,
-            'description' => $rawDescription === null ? null : $this->decodeSoapHtml($rawDescription),
+            'description' => $rawDescription === null ? null : ReferenceText::decodeSoapHtml($rawDescription),
             'is_credit_card' => $place->creditCard,
         ], $patch);
 
@@ -269,7 +274,7 @@ final readonly class PlaceService
      * @param array<string, mixed> $fields
      * @return array<string, bool|string|null>
      */
-    private function normalizeUpdatePatch(array $fields): array
+    private function normalizeUpdatePatch(array $fields, bool $allowPossibleEcho = false): array
     {
         if ($fields === []) {
             throw new InvalidArgumentException('Cannot update a Drebedengi place without fields.');
@@ -309,7 +314,7 @@ final readonly class PlaceService
         foreach ($fields as $field => $value) {
             switch ($field) {
                 case 'name':
-                    $patch[$field] = $this->normalizeName($value);
+                    $patch[$field] = $this->normalizeName($value, $allowPossibleEcho);
                     break;
                 case 'parent_id':
                     $patch[$field] = $this->normalizeParentId($value);
@@ -377,25 +382,9 @@ final readonly class PlaceService
         ));
     }
 
-    private function normalizeName(mixed $value): string
+    private function normalizeName(mixed $value, bool $allowPossibleEcho = false): string
     {
-        if (!is_string($value)) {
-            throw new InvalidArgumentException('Place name must be a string.');
-        }
-
-        $value = trim($value);
-        if ($value === '') {
-            throw new InvalidArgumentException('Place name cannot be empty.');
-        }
-        $characters = preg_match_all('/./us', $value, $unused);
-        if ($characters === false) {
-            throw new InvalidArgumentException('Place name must be valid UTF-8.');
-        }
-        if ($characters > 128) {
-            throw new InvalidArgumentException('Place name cannot exceed 128 characters.');
-        }
-
-        return $value;
+        return ReferenceText::normalize($value, 'Place name', 128, allowPossibleEcho: $allowPossibleEcho);
     }
 
     private function normalizeIconId(mixed $value): ?string
@@ -470,33 +459,6 @@ final readonly class PlaceService
         }
 
         return (string)$raw[$field];
-    }
-
-    /**
-     * @param array<string, bool|string|null> $patch
-     * @param array<string, mixed> $raw
-     * @return array<string, bool|string|null>
-     */
-    private function decodeEchoedTextPatch(array $patch, array $raw, string $context): array
-    {
-        foreach (['name', 'description'] as $field) {
-            $value = $patch[$field] ?? null;
-            if (!is_string($value)) {
-                continue;
-            }
-
-            $rawValue = $this->nullableRawString($raw, $field, $context);
-            if ($rawValue !== null && $value === $rawValue) {
-                $patch[$field] = $this->decodeSoapHtml($value);
-            }
-        }
-
-        return $patch;
-    }
-
-    private function decodeSoapHtml(string $value): string
-    {
-        return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
     private function readBackAfterWrite(string $serverId, string $context): Place

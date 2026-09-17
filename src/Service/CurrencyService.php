@@ -12,6 +12,7 @@ use Soz\Drebedengi\Model\ReferenceWriteToken;
 use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\CurrencyCatalog;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
+use Soz\Drebedengi\Support\ReferenceText;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class CurrencyService
@@ -151,11 +152,16 @@ final readonly class CurrencyService
     public function update(int|string $id, array $fields): Currency
     {
         $id = (string)DrebedengiNormalizer::positiveIntegerId($id, 'Currency ID');
-        $patch = $this->normalizeUpdatePatch($fields);
+        $this->normalizeUpdatePatch($fields, allowPossibleEcho: true);
         $this->assertFullAccess();
         $currency = $this->requireDirect($id, 'update');
         $this->assertSafelyWritable($currency);
 
+        $patch = $this->normalizeUpdatePatch(ReferenceText::decodeEchoedFields(
+            $fields,
+            $currency->raw,
+            ['name', 'code'],
+        ));
         $payload = array_replace($this->payloadFor($currency), $patch);
         if ($payload['is_autoupdate'] && $payload['code'] === '') {
             throw new InvalidArgumentException(
@@ -317,7 +323,7 @@ final readonly class CurrencyService
      * @param array<string, mixed> $fields
      * @return array<string, bool|string>
      */
-    private function normalizeUpdatePatch(array $fields): array
+    private function normalizeUpdatePatch(array $fields, bool $allowPossibleEcho = false): array
     {
         if ($fields === []) {
             throw new InvalidArgumentException('Cannot update a Drebedengi currency without fields.');
@@ -347,7 +353,13 @@ final readonly class CurrencyService
                     if (!is_string($value)) {
                         throw new InvalidArgumentException('Currency name must be a string.');
                     }
-                    $patch[$field] = $this->normalizeBoundedText($value, 'Currency name', 16, allowEmpty: false);
+                    $patch[$field] = $this->normalizeBoundedText(
+                        $value,
+                        'Currency name',
+                        16,
+                        allowEmpty: false,
+                        allowPossibleEcho: $allowPossibleEcho,
+                    );
                     break;
                 case 'course':
                     if (!is_int($value) && !is_string($value)) {
@@ -364,6 +376,7 @@ final readonly class CurrencyService
                         'Currency code',
                         16,
                         allowEmpty: true,
+                        allowPossibleEcho: $allowPossibleEcho,
                     );
                     break;
                 case 'is_autoupdate':
@@ -411,9 +424,9 @@ final readonly class CurrencyService
     {
         return [
             'server_id' => $currency->id,
-            'name' => $this->decodeSoapHtml($currency->name),
+            'name' => ReferenceText::decodeSoapHtml($currency->name),
             'course' => $currency->course ?? '1',
-            'code' => $this->decodeSoapHtml($currency->code ?? ''),
+            'code' => ReferenceText::decodeSoapHtml($currency->code ?? ''),
             'is_default' => $currency->default,
             'is_autoupdate' => $currency->autoUpdate,
             'is_hidden' => $currency->hidden,
@@ -459,25 +472,9 @@ final readonly class CurrencyService
         string $context,
         int $maxLength,
         bool $allowEmpty,
+        bool $allowPossibleEcho = false,
     ): string {
-        $value = trim($value);
-        if (!$allowEmpty && $value === '') {
-            throw new InvalidArgumentException(sprintf('%s cannot be empty.', $context));
-        }
-
-        $length = preg_match_all('/./us', $value);
-        if ($length === false) {
-            throw new InvalidArgumentException(sprintf('%s must be valid UTF-8.', $context));
-        }
-        if ($length > $maxLength) {
-            throw new InvalidArgumentException(sprintf(
-                '%s must not exceed %d characters.',
-                $context,
-                $maxLength,
-            ));
-        }
-
-        return $value;
+        return ReferenceText::normalize($value, $context, $maxLength, $allowEmpty, $allowPossibleEcho);
     }
 
     private function normalizeCourse(int|string $course): string
@@ -491,11 +488,6 @@ final readonly class CurrencyService
         }
 
         return ltrim($course, '+');
-    }
-
-    private function decodeSoapHtml(string $value): string
-    {
-        return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
     private function deleteStatus(mixed $response): bool

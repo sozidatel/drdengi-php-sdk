@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+             xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+             xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+             xmlns:tns="urn:transport-test" targetNamespace="urn:transport-test">
+  <message name="request">
+    <part name="apiId" type="xsd:string"/>
+    <part name="login" type="xsd:string"/>
+    <part name="password" type="xsd:string"/>
+  </message>
+  <message name="response"><part name="return" type="xsd:string"/></message>
+  <portType name="TransportPort">
+    <operation name="getAccessStatus"><input message="tns:request"/><output message="tns:response"/></operation>
+    <operation name="setRecordList"><input message="tns:request"/><output message="tns:response"/></operation>
+  </portType>
+  <binding name="TransportBinding" type="tns:TransportPort">
+    <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="getAccessStatus">
+      <soap:operation soapAction="urn:getAccessStatus"/>
+      <input><soap:body use="literal" namespace="urn:transport-test"/></input>
+      <output><soap:body use="literal" namespace="urn:transport-test"/></output>
+    </operation>
+    <operation name="setRecordList">
+      <soap:operation soapAction="urn:setRecordList"/>
+      <input><soap:body use="literal" namespace="urn:transport-test"/></input>
+      <output><soap:body use="literal" namespace="urn:transport-test"/></output>
+    </operation>
+  </binding>
+  <service name="TransportService"><port name="TransportPort" binding="tns:TransportBinding">
+    <soap:address location="http://127.0.0.1/unused"/>
+  </port></service>
+</definitions>

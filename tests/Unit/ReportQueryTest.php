@@ -69,6 +69,36 @@ final class ReportQueryTest extends TestCase
         );
     }
 
+    public function testClonedReportCanChangePeriodAndFiltersIndependently(): void
+    {
+        $original = ReportQuery::forDateRange(
+            new \DateTimeImmutable('2026-06-01'),
+            new \DateTimeImmutable('2026-06-30'),
+        )->onlyPlaces(['10'])->onlyCategories(['30'])->averageDaily();
+        $originalParams = $original->toSoapParams(OperationType::Expense);
+
+        $copy = clone $original;
+        self::assertSame($originalParams, $copy->toSoapParams(OperationType::Expense));
+
+        $copy->dateRange(new \DateTimeImmutable('2026-07-01'), new \DateTimeImmutable('2026-07-31'))
+            ->exceptPlaces(['20'])
+            ->includeDebts(false)
+            ->averageMonthly();
+        $copyParams = $copy->toSoapParams(OperationType::Expense);
+
+        self::assertSame($originalParams, $original->toSoapParams(OperationType::Expense));
+        self::assertSame('2026-07-01', $copyParams['period_from']);
+        self::assertSame('2026-07-31', $copyParams['period_to']);
+        self::assertSame(2, $copyParams['r_is_place']);
+        self::assertSame(['20'], $copyParams['r_place']);
+        self::assertSame(['30'], $copyParams['r_category']);
+        self::assertFalse($copyParams['is_show_duty']);
+        self::assertSame(ReportAveraging::Monthly->value, $copyParams['r_middle']);
+
+        $original->allCategories()->today()->includePlanned();
+        self::assertSame($copyParams, $copy->toSoapParams(OperationType::Expense));
+    }
+
     public function testRejectsUnsupportedOperationType(): void
     {
         $this->expectException(InvalidArgumentException::class);

@@ -29,6 +29,8 @@ final readonly class Tag implements \JsonSerializable
      */
     public static function fromSoap(array $raw): self
     {
+        $sort = DrebedengiNormalizer::string($raw['sort'] ?? '');
+
         return new self(
             id: DrebedengiNormalizer::requiredString($raw, 'id', 'tag'),
             name: DrebedengiNormalizer::requiredString($raw, 'name', 'tag'),
@@ -36,7 +38,7 @@ final readonly class Tag implements \JsonSerializable
             familyId: DrebedengiNormalizer::nullableId($raw['family_id'] ?? null),
             hidden: DrebedengiNormalizer::bool($raw['is_hidden'] ?? false),
             family: DrebedengiNormalizer::bool($raw['is_family'] ?? false),
-            sort: DrebedengiNormalizer::nullableId($raw['sort'] ?? null),
+            sort: $sort === '' ? null : $sort,
             raw: $raw,
             userId: DrebedengiNormalizer::nullableId($raw['user_id'] ?? $raw['nuid'] ?? null),
         );

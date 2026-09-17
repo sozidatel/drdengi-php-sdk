@@ -13,6 +13,7 @@ use Soz\Drebedengi\Model\SourceNode;
 use Soz\Drebedengi\Model\SourceOption;
 use Soz\Drebedengi\Model\WriteResult;
 use Soz\Drebedengi\Support\DrebedengiNormalizer;
+use Soz\Drebedengi\Support\ReferenceText;
 use Soz\Drebedengi\Transport\TransportInterface;
 
 final readonly class SourceService
@@ -148,23 +149,27 @@ final readonly class SourceService
     public function update(string|int $serverId, array $fields): Source
     {
         $serverId = (string)DrebedengiNormalizer::positiveIntegerId($serverId, 'Source ID');
-        $patch = $this->normalizeUpdatePatch($fields);
+        $this->normalizeUpdatePatch($fields, allowPossibleEcho: true);
         $this->assertFullAccess('updates');
         $source = $this->sourceForUpdate($serverId);
 
         $rawName = $this->nullableRawString($source->raw, 'name') ?? $source->name;
         $rawDescription = $this->nullableRawString($source->raw, 'description');
-        $patch = $this->decodeEchoedTextPatch($patch, $source->raw);
+        $patch = $this->normalizeUpdatePatch(ReferenceText::decodeEchoedFields(
+            $fields,
+            $source->raw,
+            ['name', 'description'],
+        ));
 
         $payload = array_replace([
             'server_id' => $serverId,
-            'name' => $this->decodeSoapHtml($rawName),
+            'name' => ReferenceText::decodeSoapHtml($rawName),
             'parent_id' => $source->parentId ?? '-1',
             'type' => 2,
             'is_hidden' => $source->hidden,
             'is_for_duty' => false,
             'sort' => $source->sort ?? '0',
-            'description' => $rawDescription === null ? null : $this->decodeSoapHtml($rawDescription),
+            'description' => $rawDescription === null ? null : ReferenceText::decodeSoapHtml($rawDescription),
         ], $patch);
 
         $result = new WriteResult($this->savePayloads([$payload]));
@@ -306,7 +311,7 @@ final readonly class SourceService
      * @param array<string, mixed> $fields
      * @return array<string, bool|string|null>
      */
-    private function normalizeUpdatePatch(array $fields): array
+    private function normalizeUpdatePatch(array $fields, bool $allowPossibleEcho = false): array
     {
         if ($fields === []) {
             throw new InvalidArgumentException('Cannot update a Drebedengi source without fields.');
@@ -329,7 +334,7 @@ final readonly class SourceService
                     if (!is_string($value)) {
                         throw new InvalidArgumentException('Source name must be a string.');
                     }
-                    $patch[$field] = $this->normalizeName($value);
+                    $patch[$field] = $this->normalizeName($value, $allowPossibleEcho);
                     break;
                 case 'parent_id':
                     if ($value !== null && !is_int($value) && !is_string($value)) {
@@ -371,22 +376,9 @@ final readonly class SourceService
         return $patch;
     }
 
-    private function normalizeName(string $name): string
+    private function normalizeName(string $value, bool $allowPossibleEcho = false): string
     {
-        $name = trim($name);
-        if ($name === '') {
-            throw new InvalidArgumentException('Source name cannot be empty.');
-        }
-
-        $length = preg_match_all('/./us', $name);
-        if ($length === false) {
-            throw new InvalidArgumentException('Source name must be valid UTF-8.');
-        }
-        if ($length > 128) {
-            throw new InvalidArgumentException('Source name must not exceed 128 characters.');
-        }
-
-        return $name;
+        return ReferenceText::normalize($value, 'Source name', 128, allowPossibleEcho: $allowPossibleEcho);
     }
 
     private function normalizeParentId(int|string|null $parentId): string
@@ -454,35 +446,5 @@ final readonly class SourceService
         }
 
         return (string)$raw[$field];
-    }
-
-    /**
-     * getSourceList HTML-escapes text. Decode values echoed unchanged from the
-     * fetched object so read-modify-write does not double-escape them.
-     *
-     * @param array<string, bool|string|null> $patch
-     * @param array<string, mixed> $raw
-     * @return array<string, bool|string|null>
-     */
-    private function decodeEchoedTextPatch(array $patch, array $raw): array
-    {
-        foreach (['name', 'description'] as $field) {
-            $value = $patch[$field] ?? null;
-            if (!is_string($value)) {
-                continue;
-            }
-
-            $rawValue = $this->nullableRawString($raw, $field);
-            if ($rawValue !== null && $value === $rawValue) {
-                $patch[$field] = $this->decodeSoapHtml($value);
-            }
-        }
-
-        return $patch;
-    }
-
-    private function decodeSoapHtml(string $value): string
-    {
-        return html_entity_decode($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 }

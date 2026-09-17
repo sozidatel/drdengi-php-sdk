@@ -147,7 +147,18 @@ final readonly class Record implements \JsonSerializable
             ));
         }
 
-        return (int)$value;
+        $negative = str_starts_with($value, '-');
+        $digits = ltrim($negative ? substr($value, 1) : $value, '0');
+        $normalized = ($negative ? '-' : '') . ($digits === '' ? '0' : $digits);
+        $integer = filter_var($normalized, FILTER_VALIDATE_INT);
+        if ($integer === false) {
+            throw new UnexpectedResponseException(sprintf(
+                'Drebedengi record response contains %s outside the supported integer range.',
+                $label,
+            ));
+        }
+
+        return $integer;
     }
 
     /**

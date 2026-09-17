@@ -59,7 +59,7 @@ final class RecordServiceTest extends TestCase
 
     public function testCreateTransferBuildsPairedRecords(): void
     {
-        $transport = new FakeTransport();
+        $transport = new FakeTransport(['setRecordList' => [['server_id' => '10'], ['server_id' => '11']]]);
         $service = $this->service($transport);
 
         $service->createTransfer(
@@ -165,7 +165,7 @@ final class RecordServiceTest extends TestCase
 
     public function testCreateExpenseFormatsDateInAccountTimezone(): void
     {
-        $transport = new FakeTransport();
+        $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
         $service = $this->service(
             $transport,
             new ClientOptions(new \DateTimeZone('Europe/Podgorica')),
@@ -722,7 +722,10 @@ final class RecordServiceTest extends TestCase
 
     public function testTransferUsesExplicitPairedWriteToken(): void
     {
-        $transport = new FakeTransport();
+        $transport = new FakeTransport(['setRecordList' => [
+            ['server_id' => '10', 'client_id' => 111],
+            ['server_id' => '11', 'client_id' => 222],
+        ]]);
         $service = $this->service($transport);
 
         $result = $service->createTransfer(
@@ -818,7 +821,7 @@ final class RecordServiceTest extends TestCase
 
     public function testCurrencyAmountCreatesValidatedWritePayload(): void
     {
-        $transport = new FakeTransport();
+        $transport = new FakeTransport(['setRecordList' => [['server_id' => '10']]]);
         $btc = Currency::fromSoap([
             'id' => '7',
             'name' => 'Bitcoin',
